@@ -1,0 +1,66 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+.uv-python/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Raw datasets and downloaded archives
+CSV.zip
+CSV/
+PCAPs/
+cse2018/
+*.pcap
+*.pcapng
+*.pcap0
+*.pcap1
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+
+# Generated data products
+data/raw/
+data/processed/
+data/graphs/
+
+# Model artifacts, checkpoints, reports generated from runs
+artifacts/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.ts
+*.joblib
+*.pkl
+
+# Large tabular/binary outputs
+*.csv
+*.parquet
+*.feather
+*.npy
+*.npz
+
+# Runtime logs
+*.log
+
+# Keep project documentation even when names contain spaces
+!Project Context.md
+!FOLDER_STRUCTURE.md
