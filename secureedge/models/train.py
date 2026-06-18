@@ -226,6 +226,35 @@ def write_training_history_csv(path: Path, history: list[dict[str, object]]) -> 
             writer.writerow({field: row.get(field) for field in fieldnames})
 
 
+def load_resume_state(
+    model: SecureEdgeHGNN,
+    optimizer: torch.optim.Optimizer,
+    scheduler,
+    device: torch.device,
+) -> dict[str, object]:
+    if not config.RESUME_CHECKPOINT_PATH.exists():
+        raise FileNotFoundError(f"Resume checkpoint not found: {config.RESUME_CHECKPOINT_PATH}")
+    checkpoint = torch.load(config.RESUME_CHECKPOINT_PATH, map_location=device, weights_only=False)
+    if not isinstance(checkpoint, dict):
+        raise TypeError(f"Expected checkpoint dictionary, found {type(checkpoint)!r}")
+    model.load_state_dict(checkpoint["model_state_dict"])
+    if config.RESUME_LOAD_OPTIMIZER and "optimizer_state" in checkpoint:
+        optimizer.load_state_dict(checkpoint["optimizer_state"])
+    if config.RESUME_LOAD_SCHEDULER and "scheduler_state" in checkpoint:
+        scheduler.load_state_dict(checkpoint["scheduler_state"])
+    checkpoint_epoch = int(checkpoint.get("epoch", 0))
+    if checkpoint_epoch < 1:
+        raise ValueError(f"Checkpoint {config.RESUME_CHECKPOINT_PATH} does not contain a valid epoch number.")
+    return {
+        "path": str(config.RESUME_CHECKPOINT_PATH),
+        "source_run_id": checkpoint.get("run_id"),
+        "checkpoint_epoch": checkpoint_epoch,
+        "best_macro_f1": float(checkpoint.get("best_macro_f1", checkpoint.get("macro_f1", -1.0))),
+        "optimizer_loaded": bool(config.RESUME_LOAD_OPTIMIZER and "optimizer_state" in checkpoint),
+        "scheduler_loaded": bool(config.RESUME_LOAD_SCHEDULER and "scheduler_state" in checkpoint),
+    }
+
+
 def markdown_table(headers: list[str], rows: list[list[object]]) -> list[str]:
     lines = ["| " + " | ".join(headers) + " |", "| " + " | ".join("---" for _ in headers) + " |"]
     for row in rows:
@@ -242,6 +271,7 @@ def write_run_markdown(
     best_epoch: int | None,
     best_f1: float,
     stopped_reason: str,
+    resume_info: dict[str, object] | None = None,
 ) -> None:
     latest = history[-1] if history else {}
     lines = [
@@ -276,6 +306,20 @@ def write_run_markdown(
         f"- Best epoch: `{best_epoch}`.",
         f"- Best macro F1: `{best_f1:.6f}`.",
     ]
+    if resume_info:
+        lines.extend(
+            [
+                "",
+                "## Resume Source",
+                "",
+                f"- Checkpoint: `{resume_info['path']}`.",
+                f"- Source run: `{resume_info['source_run_id']}`.",
+                f"- Source best epoch: `{resume_info['checkpoint_epoch']}`.",
+                f"- Source best macro F1: `{float(resume_info['best_macro_f1']):.6f}`.",
+                f"- Optimizer state loaded: `{bool_label(bool(resume_info['optimizer_loaded']))}`.",
+                f"- Scheduler state loaded: `{bool_label(bool(resume_info['scheduler_loaded']))}`.",
+            ]
+        )
     if latest:
         lines.extend(
             [
@@ -369,6 +413,8 @@ def train() -> None:
                 "max_epochs": config.MAX_EPOCHS,
                 "scheduler": config.LR_SCHEDULER,
                 "label_smoothing": config.LABEL_SMOOTHING,
+                "resume_from_checkpoint": config.RESUME_FROM_CHECKPOINT,
+                "resume_checkpoint_path": str(config.RESUME_CHECKPOINT_PATH) if config.RESUME_FROM_CHECKPOINT else None,
             },
             indent=2,
         )
@@ -418,8 +464,11 @@ def train() -> None:
         "max_epochs": config.MAX_EPOCHS,
         "early_stopping_patience": config.EARLY_STOPPING_PATIENCE,
         "n_batches_per_epoch": n_batches_per_epoch,
+        "resume_from_checkpoint": config.RESUME_FROM_CHECKPOINT,
+        "resume_checkpoint_path": str(config.RESUME_CHECKPOINT_PATH) if config.RESUME_FROM_CHECKPOINT else None,
+        "resume_load_optimizer": config.RESUME_LOAD_OPTIMIZER,
+        "resume_load_scheduler": config.RESUME_LOAD_SCHEDULER,
     }
-    run_config_path.write_text(json.dumps(run_config, indent=2), encoding="utf-8")
 
     model = SecureEdgeHGNN().to(device)
     document_architecture()
@@ -447,13 +496,30 @@ def train() -> None:
     else:
         raise ValueError("SECUREEDGE_SCHEDULER must be one of: cosine, plateau")
 
+    resume_info = None
+    start_epoch = 1
     best_f1 = -1.0
     best_epoch: int | None = None
     stale_epochs = 0
+    if config.RESUME_FROM_CHECKPOINT:
+        resume_info = load_resume_state(model, optimizer, scheduler, device)
+        checkpoint_epoch = int(resume_info["checkpoint_epoch"])
+        if config.MAX_EPOCHS <= checkpoint_epoch:
+            raise ValueError(
+                "SECUREEDGE_MAX_EPOCHS must be greater than the checkpoint epoch when resuming. "
+                f"Checkpoint epoch is {checkpoint_epoch}, but SECUREEDGE_MAX_EPOCHS is {config.MAX_EPOCHS}."
+            )
+        start_epoch = checkpoint_epoch + 1
+        best_epoch = checkpoint_epoch
+        best_f1 = float(resume_info["best_macro_f1"])
+        run_config["resume_source"] = resume_info
+    run_config["start_epoch"] = start_epoch
+    run_config_path.write_text(json.dumps(run_config, indent=2), encoding="utf-8")
+
     history: list[dict[str, float]] = []
     stopped_reason = "max_epochs_reached"
-    write_run_markdown(run_log_path, run_id, run_started_at, device, history, best_epoch, best_f1, "running")
-    for epoch in range(1, config.MAX_EPOCHS + 1):
+    write_run_markdown(run_log_path, run_id, run_started_at, device, history, best_epoch, best_f1, "running", resume_info)
+    for epoch in range(start_epoch, config.MAX_EPOCHS + 1):
         epoch_started = time.perf_counter()
         if epoch <= config.WARMUP_EPOCHS:
             ratio = epoch / max(config.WARMUP_EPOCHS, 1)
@@ -535,7 +601,7 @@ def train() -> None:
         history.append(row)
         run_history_json_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
         write_training_history_csv(run_history_csv_path, history)
-        write_run_markdown(run_log_path, run_id, run_started_at, device, history, best_epoch, best_f1, "running")
+        write_run_markdown(run_log_path, run_id, run_started_at, device, history, best_epoch, best_f1, "running", resume_info)
         suffix = " | BEST" if is_best else ""
         print(
             f"Epoch {epoch:03d}/{config.MAX_EPOCHS} | Loss: {train_loss:.4f} | "
@@ -568,6 +634,7 @@ def train() -> None:
                     "run_id": run_id,
                     "history_json": str(run_history_json_path),
                     "history_csv": str(run_history_csv_path),
+                    "resumed_from": resume_info,
                     "config": {
                         "flow_node": config.N_FLOW_NODE_FEATURES,
                         "packet_node": config.N_PACKET_FEATURES,
@@ -586,7 +653,7 @@ def train() -> None:
             stopped_reason = "early_stopping"
             break
 
-    write_run_markdown(run_log_path, run_id, run_started_at, device, history, best_epoch, best_f1, stopped_reason)
+    write_run_markdown(run_log_path, run_id, run_started_at, device, history, best_epoch, best_f1, stopped_reason, resume_info)
 
     write_context(
         "05_training.md",
@@ -607,6 +674,8 @@ def train() -> None:
             f"- Weight decay: `{config.WEIGHT_DECAY}`.",
             f"- Scheduler: `{config.LR_SCHEDULER}`, min LR `{config.MIN_LEARNING_RATE}`.",
             f"- Label smoothing: `{config.LABEL_SMOOTHING}`.",
+            f"- Resume from checkpoint: `{config.RESUME_FROM_CHECKPOINT}`.",
+            f"- Resume checkpoint path: `{config.RESUME_CHECKPOINT_PATH if config.RESUME_FROM_CHECKPOINT else 'not used'}`.",
             "- Loss: plain `CrossEntropyLoss()` with no class weights and no label smoothing.",
             f"- Saved best checkpoint to `{config.HGNN_CHECKPOINT_PATH}`.",
             "",

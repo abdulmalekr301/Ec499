@@ -32,13 +32,28 @@ class SecureEdgeHGNN(nn.Module):
         self.conv1 = HeteroConv(
             {
                 ("flow", "contains", "packet"): GATConv(
-                    (-1, -1), hidden_size, edge_dim=config.N_CONTAIN_EDGE_FEATS, add_self_loops=False
+                    (-1, -1),
+                    config.HGNN_ATTN_SIZE,
+                    heads=2,
+                    concat=True,
+                    edge_dim=config.N_CONTAIN_EDGE_FEATS,
+                    add_self_loops=False,
                 ),
                 ("packet", "rev_contains", "flow"): GATConv(
-                    (-1, -1), hidden_size, edge_dim=config.N_CONTAIN_EDGE_FEATS, add_self_loops=False
+                    (-1, -1),
+                    config.HGNN_ATTN_SIZE,
+                    heads=2,
+                    concat=True,
+                    edge_dim=config.N_CONTAIN_EDGE_FEATS,
+                    add_self_loops=False,
                 ),
                 ("packet", "linked_to", "packet"): GATConv(
-                    (-1, -1), hidden_size, edge_dim=config.N_LINK_EDGE_FEATS, add_self_loops=False
+                    (-1, -1),
+                    config.HGNN_ATTN_SIZE,
+                    heads=2,
+                    concat=True,
+                    edge_dim=config.N_LINK_EDGE_FEATS,
+                    add_self_loops=False,
                 ),
             },
             aggr="sum",
@@ -47,9 +62,15 @@ class SecureEdgeHGNN(nn.Module):
         self.bn_packet_1 = nn.BatchNorm1d(hidden_size)
         self.conv2 = HeteroConv(
             {
-                ("flow", "contains", "packet"): GATConv((-1, -1), hidden_size, add_self_loops=False),
-                ("packet", "rev_contains", "flow"): GATConv((-1, -1), hidden_size, add_self_loops=False),
-                ("packet", "linked_to", "packet"): GATConv((-1, -1), hidden_size, add_self_loops=False),
+                ("flow", "contains", "packet"): GATConv(
+                    (-1, -1), config.HGNN_ATTN_SIZE, heads=2, concat=True, add_self_loops=False
+                ),
+                ("packet", "rev_contains", "flow"): GATConv(
+                    (-1, -1), config.HGNN_ATTN_SIZE, heads=2, concat=True, add_self_loops=False
+                ),
+                ("packet", "linked_to", "packet"): GATConv(
+                    (-1, -1), config.HGNN_ATTN_SIZE, heads=2, concat=True, add_self_loops=False
+                ),
             },
             aggr="sum",
         )
@@ -99,6 +120,7 @@ def document_architecture() -> None:
             f"- Flow node input dimension: `{config.N_FLOW_NODE_FEATURES}`.",
             f"- Packet node input dimension: `{config.N_PACKET_FEATURES}`.",
             f"- Hidden size: `{config.HGNN_HIDDEN_SIZE}`.",
+            f"- GAT attention: `heads=2`, `attention size={config.HGNN_ATTN_SIZE}`, concatenated output `{config.HGNN_ATTN_SIZE * 2}`.",
             "- Graph embeddings are produced by mean-pooling flow and packet node embeddings and averaging the two pooled vectors.",
             "- The classifier head is `Linear(64, 32) -> ReLU -> Linear(32, 16) -> ReLU -> Linear(16, 8)`.",
         ],
