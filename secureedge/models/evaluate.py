@@ -5,19 +5,27 @@ from collections import defaultdict
 
 import numpy as np
 import torch
-from sklearn.metrics import classification_report, f1_score
+from sklearn.metrics import classification_report, confusion_matrix, f1_score
 
 from secureedge import config
 from secureedge.data.dataset import load_graph_dataset
 from secureedge.models.hgnn import SecureEdgeHGNN
-from secureedge.models.train import require_pyg_dataloader, training_device
+from secureedge.models.train import checkpoint_signature_compatible, require_pyg_dataloader, training_device
 from secureedge.utils import ensure_directories, write_context, write_json
+
+XGNID_CLASS_ORDER = ["Benign", "WebBased", "Spoofing", "Recon", "Mirai", "DoS", "DDoS", "BruteForce"]
 
 
 def load_checkpoint() -> dict:
     if not config.HGNN_CHECKPOINT_PATH.exists():
         raise FileNotFoundError("Run `python -m secureedge.models.train` before evaluation.")
-    return torch.load(config.HGNN_CHECKPOINT_PATH, map_location="cpu", weights_only=False)
+    checkpoint = torch.load(config.HGNN_CHECKPOINT_PATH, map_location="cpu", weights_only=False)
+    if not checkpoint_signature_compatible(checkpoint):
+        raise ValueError(
+            f"Checkpoint {config.HGNN_CHECKPOINT_PATH} is incompatible with the current model configuration. "
+            "Use matching architecture environment variables or retrain from scratch."
+        )
+    return checkpoint
 
 
 def as_list(value: object, length: int) -> list[object]:
@@ -54,6 +62,17 @@ def ddos_subtype_distribution(predictions: np.ndarray, subtypes: list[str], clas
             continue
         distribution[subtype][config.CLASS_NAMES[int(pred_index)]] += 1
     return {subtype: dict(counts) for subtype, counts in sorted(distribution.items())}
+
+
+def named_confusion_matrix(targets: np.ndarray, predictions: np.ndarray, class_order: list[str]) -> dict[str, object]:
+    indices = [config.CLASS_TO_INDEX[name] for name in class_order]
+    matrix = confusion_matrix(targets, predictions, labels=indices)
+    return {
+        "class_order": class_order,
+        "matrix": matrix.tolist(),
+        "rows_are_true_labels": True,
+        "columns_are_predicted_labels": True,
+    }
 
 
 def evaluate() -> dict:
@@ -95,6 +114,10 @@ def evaluate() -> dict:
     metrics = {
         "macro_f1": float(f1_score(targets, predictions, average="macro", zero_division=0)),
         "classification_report": report,
+        "secureedge_class_order": list(config.CLASS_NAMES),
+        "xgnid_class_order": list(XGNID_CLASS_ORDER),
+        "confusion_matrix_secureedge_order": named_confusion_matrix(targets, predictions, list(config.CLASS_NAMES)),
+        "confusion_matrix_xgnid_order": named_confusion_matrix(targets, predictions, list(XGNID_CLASS_ORDER)),
         "ddos_subtype_prediction_distribution": ddos_distribution,
         "ddos_subtype_ddos_recall": ddos_recall,
         "checkpoint": str(config.HGNN_CHECKPOINT_PATH),
@@ -113,6 +136,7 @@ def evaluate() -> dict:
             "## Target",
             "- Final methodology target is macro F1 >= 0.97.",
             "- Each DDoS subtype should be predicted as DDoS at a rate >= 0.90.",
+            "- Per-class comparisons are name-keyed; SecureEdge class indices are not renumbered.",
             "",
             "## DDoS Subtype DDoS Recall",
             "```json",

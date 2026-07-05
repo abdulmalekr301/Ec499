@@ -75,6 +75,7 @@ def create_shards(shard_size: int = config.GRAPH_SHARD_SIZE, seed: int = config.
     ensure_directories()
     manifest = load_graph_manifest()
     config.GRAPH_TRAIN_SHARD_DIR.mkdir(parents=True, exist_ok=True)
+    config.GRAPH_VAL_SHARD_DIR.mkdir(parents=True, exist_ok=True)
     config.GRAPH_TEST_SHARD_DIR.mkdir(parents=True, exist_ok=True)
 
     shard_manifest = {
@@ -89,11 +90,18 @@ def create_shards(shard_size: int = config.GRAPH_SHARD_SIZE, seed: int = config.
                 seed,
                 overwrite,
             ),
+            "val": create_split_shards(
+                split_manifest_paths(manifest, "val"),
+                config.GRAPH_VAL_SHARD_DIR,
+                shard_size,
+                seed + 1,
+                overwrite,
+            ),
             "test": create_split_shards(
                 split_manifest_paths(manifest, "test"),
                 config.GRAPH_TEST_SHARD_DIR,
                 shard_size,
-                seed + 1,
+                seed + 2,
                 overwrite,
             ),
         },
@@ -106,6 +114,7 @@ def create_shards(shard_size: int = config.GRAPH_SHARD_SIZE, seed: int = config.
             "## Action",
             f"- Packed individual graph files into shard files of up to `{shard_size}` graphs.",
             f"- Train shards: `{shard_manifest['splits']['train']['shard_count']}`.",
+            f"- Validation shards: `{shard_manifest['splits']['val']['shard_count']}`.",
             f"- Test shards: `{shard_manifest['splits']['test']['shard_count']}`.",
             f"- Saved shard manifest to `{config.GRAPH_SHARD_MANIFEST_PATH}`.",
             "",
@@ -114,8 +123,10 @@ def create_shards(shard_size: int = config.GRAPH_SHARD_SIZE, seed: int = config.
             json.dumps(
                 {
                     "train_graphs": shard_manifest["splits"]["train"]["total_graphs"],
+                    "val_graphs": shard_manifest["splits"]["val"]["total_graphs"],
                     "test_graphs": shard_manifest["splits"]["test"]["total_graphs"],
                     "train_shards": shard_manifest["splits"]["train"]["shard_count"],
+                    "val_shards": shard_manifest["splits"]["val"]["shard_count"],
                     "test_shards": shard_manifest["splits"]["test"]["shard_count"],
                 },
                 indent=2,
@@ -134,6 +145,7 @@ def main() -> None:
             {
                 "manifest": str(config.GRAPH_SHARD_MANIFEST_PATH),
                 "train_shards": manifest["splits"]["train"]["shard_count"],
+                "val_shards": manifest["splits"]["val"]["shard_count"],
                 "test_shards": manifest["splits"]["test"]["shard_count"],
             },
             indent=2,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import pickle
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -306,6 +307,7 @@ def clear_pt_files(directory: Path) -> None:
 def save_graph_split(
     graphs: list[GraphRef],
     split_dir: Path,
+    split_name: str,
     flow_scaler: StandardScaler,
     contain_scaler: StandardScaler,
     link_norm_value: float,
@@ -317,6 +319,14 @@ def save_graph_split(
         graph = normalize_graph(load_graph_ref(graph_ref), flow_scaler, contain_scaler, link_norm_value)
         class_name = str(graph.class_name)
         counters[class_name] += 1
+        source_file = str(getattr(graph, "source_file", ""))
+        source_order = int(getattr(graph, "source_order", -1))
+        graph_id_payload = f"{split_name}|{class_name}|{graph.subtype_label}|{source_file}|{source_order}"
+        graph.graph_id = hashlib.sha256(graph_id_payload.encode("utf-8")).hexdigest()
+        graph.split = split_name
+        graph.used_attacker_mac_filter = bool(config.ENABLE_ATTACKER_MAC_FILTER)
+        graph.num_packets = int(graph["packet"].x.shape[0])
+        graph.flow_id_hash = hashlib.sha256(f"{source_file}|{source_order}".encode("utf-8")).hexdigest()
         path = split_dir / f"{class_name}_{counters[class_name]:06d}.pt"
         import torch
 
@@ -325,13 +335,14 @@ def save_graph_split(
     return {class_name: paths_by_class.get(class_name, []) for class_name in config.CLASS_NAMES}
 
 
-def save_graph_dataset(train_graphs: list[GraphRef], test_graphs: list[GraphRef]) -> dict[str, object]:
-    if not train_graphs or not test_graphs:
-        raise ValueError("Train and test graph splits must both contain at least one graph.")
+def save_graph_dataset(train_graphs: list[GraphRef], val_graphs: list[GraphRef], test_graphs: list[GraphRef]) -> dict[str, object]:
+    if not train_graphs or not val_graphs or not test_graphs:
+        raise ValueError("Train, validation, and test graph splits must all contain at least one graph.")
     flow_scaler, contain_scaler, link_norm_value = fit_graph_normalizers(train_graphs)
     config.FLOW_FEATURE_ORDER_PATH.write_text(json.dumps(list(config.FLOW_FEATURE_ORDER), indent=2), encoding="utf-8")
-    train_paths = save_graph_split(train_graphs, config.GRAPH_TRAIN_DIR, flow_scaler, contain_scaler, link_norm_value)
-    test_paths = save_graph_split(test_graphs, config.GRAPH_TEST_DIR, flow_scaler, contain_scaler, link_norm_value)
+    train_paths = save_graph_split(train_graphs, config.GRAPH_TRAIN_DIR, "train", flow_scaler, contain_scaler, link_norm_value)
+    val_paths = save_graph_split(val_graphs, config.GRAPH_VAL_DIR, "val", flow_scaler, contain_scaler, link_norm_value)
+    test_paths = save_graph_split(test_graphs, config.GRAPH_TEST_DIR, "test", flow_scaler, contain_scaler, link_norm_value)
     first_graph = load_graph_ref(train_graphs[0])
     if is_compact_graph(first_graph):
         feature_names = list(first_graph["flow_feature_names"])
@@ -341,6 +352,7 @@ def save_graph_dataset(train_graphs: list[GraphRef], test_graphs: list[GraphRef]
         flow_node_dim = int(first_graph["flow"].x.shape[1])
     manifest = {
         "n_train": len(train_graphs),
+        "n_val": len(val_graphs),
         "n_test": len(test_graphs),
         "n_flow_features": max(0, flow_node_dim - config.N_TEMPORAL_FEATURES),
         "n_temporal_feats": config.N_TEMPORAL_FEATURES,
@@ -349,15 +361,22 @@ def save_graph_dataset(train_graphs: list[GraphRef], test_graphs: list[GraphRef]
         "n_contain_edge_feats": config.N_CONTAIN_EDGE_FEATS,
         "n_link_edge_feats": config.N_LINK_EDGE_FEATS,
         "class_counts_train": {class_name: len(train_paths[class_name]) for class_name in config.CLASS_NAMES},
+        "class_counts_val": {class_name: len(val_paths[class_name]) for class_name in config.CLASS_NAMES},
         "class_counts_test": {class_name: len(test_paths[class_name]) for class_name in config.CLASS_NAMES},
         "train_files": [path for class_name in config.CLASS_NAMES for path in train_paths[class_name]],
+        "val_files": [path for class_name in config.CLASS_NAMES for path in val_paths[class_name]],
         "test_files": [path for class_name in config.CLASS_NAMES for path in test_paths[class_name]],
-        "total_graph_count": len(train_graphs) + len(test_graphs),
+        "total_graph_count": len(train_graphs) + len(val_graphs) + len(test_graphs),
         "splits": {
             "train": {
                 "count": len(train_graphs),
                 "per_class": {class_name: len(train_paths[class_name]) for class_name in config.CLASS_NAMES},
                 "paths": train_paths,
+            },
+            "val": {
+                "count": len(val_graphs),
+                "per_class": {class_name: len(val_paths[class_name]) for class_name in config.CLASS_NAMES},
+                "paths": val_paths,
             },
             "test": {
                 "count": len(test_graphs),
@@ -377,6 +396,11 @@ def save_graph_dataset(train_graphs: list[GraphRef], test_graphs: list[GraphRef]
             "flow_node": str(config.FLOW_NODE_SCALER_PATH),
             "contain_edge": str(config.CONTAIN_EDGE_SCALER_PATH),
             "link_edge": str(config.LINK_EDGE_NORM_PATH),
+        },
+        "scaler_fit_source": {
+            "flow_scaler_fit_split": "train",
+            "contain_edge_scaler_fit_split": "train",
+            "link_delta_normalizer_fit_split": "train",
         },
         "flow_feature_order_path": str(config.FLOW_FEATURE_ORDER_PATH),
     }

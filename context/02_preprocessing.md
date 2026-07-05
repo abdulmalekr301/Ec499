@@ -1,12 +1,12 @@
 # Compact Preprocessing
 
-Generated: `2026-06-17T17:02:18+00:00`
+Generated: `2026-07-04T21:45:00+00:00`
 
 ## Action
 - Reused existing compact reservoir under `/var/home/alucard-00/EC499/data/graphs/_reservoir`.
 - Did not rerun NFStream extraction or modify raw compact records.
-- Loaded `173324` compact records across `34` subtype directories.
-- Applied XG-NID balanced-pool splitting: balance each class to train+test target first, then split 4,000 test and 20,000 train records.
+- Loaded `164263` compact records across `34` subtype directories.
+- Applied leakage-safe splitting: reserve validation/test records first, then oversample the train split only.
 - Saved compact reservoir manifest to `/var/home/alucard-00/EC499/artifacts/compact_reservoir_manifest.json`.
 
 ## Counts
@@ -15,8 +15,8 @@ Generated: `2026-06-17T17:02:18+00:00`
   "seen_counts": {
     "Backdoor_Malware": 3236,
     "BenignTraffic": 24000,
-    "BrowserHijacking": 4000,
-    "CommandInjection": 4000,
+    "BrowserHijacking": 4667,
+    "CommandInjection": 4667,
     "DDoS-ACK_Fragmentation": 2000,
     "DDoS-HTTP_Flood": 2000,
     "DDoS-ICMP_Flood": 2000,
@@ -35,24 +35,24 @@ Generated: `2026-06-17T17:02:18+00:00`
     "DoS-SYN_Flood": 6000,
     "DoS-TCP_Flood": 6000,
     "DoS-UDP_Flood": 6000,
-    "MITM-ArpSpoofing": 12000,
+    "MITM-ArpSpoofing": 2151,
     "Mirai-greeth_flood": 8000,
     "Mirai-greip_flood": 8000,
     "Mirai-udpplain": 8000,
     "Recon-HostDiscovery": 4800,
     "Recon-OSScan": 4800,
-    "Recon-PingSweep": 2226,
+    "Recon-PingSweep": 743,
     "Recon-PortScan": 4800,
-    "SqlInjection": 4000,
+    "SqlInjection": 4667,
     "Uploading_Attack": 1619,
     "VulnerabilityScan": 4800,
-    "XSS": 4000
+    "XSS": 4270
   },
   "stored_counts": {
     "Backdoor_Malware": 3236,
     "BenignTraffic": 24000,
-    "BrowserHijacking": 4000,
-    "CommandInjection": 4000,
+    "BrowserHijacking": 4667,
+    "CommandInjection": 4667,
     "DDoS-ACK_Fragmentation": 2000,
     "DDoS-HTTP_Flood": 2000,
     "DDoS-ICMP_Flood": 2000,
@@ -71,101 +71,221 @@ Generated: `2026-06-17T17:02:18+00:00`
     "DoS-SYN_Flood": 6000,
     "DoS-TCP_Flood": 6000,
     "DoS-UDP_Flood": 6000,
-    "MITM-ArpSpoofing": 12000,
+    "MITM-ArpSpoofing": 2151,
     "Mirai-greeth_flood": 8000,
     "Mirai-greip_flood": 8000,
     "Mirai-udpplain": 8000,
     "Recon-HostDiscovery": 4800,
     "Recon-OSScan": 4800,
-    "Recon-PingSweep": 2226,
+    "Recon-PingSweep": 743,
     "Recon-PortScan": 4800,
-    "SqlInjection": 4000,
+    "SqlInjection": 4667,
     "Uploading_Attack": 1619,
     "VulnerabilityScan": 4800,
-    "XSS": 4000
+    "XSS": 4270
   },
   "class_pool_counts_before_split": {
     "Benign": 24000,
     "DDoS": 24000,
     "DoS": 24000,
     "Mirai": 24000,
-    "Recon": 21426,
-    "Spoofing": 24000,
-    "WebBased": 20855,
+    "Recon": 19943,
+    "Spoofing": 14151,
+    "WebBased": 23126,
     "BruteForce": 11043
   },
   "oversampling_summary": {
     "Benign": {
-      "real_available": 24000,
-      "target_total": 24000,
-      "unique_in_balanced_pool": 24000,
-      "oversampled_count": 0,
-      "oversampled_fraction": 0.0,
+      "real_available": 16000,
+      "target_total": 20000,
+      "unique_in_balanced_pool": 16000,
+      "oversampled_count": 4000,
+      "oversampled_fraction": 0.2,
+      "split_order": "split_first_then_oversample_train_only",
+      "raw_unique_available": 24000,
+      "content_hash_group_count": 23986,
+      "train_seed_count": 16000,
+      "requested_train_count": 20000,
+      "requested_val_count": 4000,
+      "requested_test_count": 4000,
       "train_count": 20000,
-      "test_count": 4000
+      "val_count": 4000,
+      "test_count": 4000,
+      "val_shortfall": 0,
+      "test_shortfall": 0,
+      "cross_split_duplicate_reference_counts": {
+        "train_val": 0,
+        "train_test": 0,
+        "val_test": 0
+      }
     },
     "DDoS": {
-      "real_available": 24000,
-      "target_total": 24000,
-      "unique_in_balanced_pool": 24000,
-      "oversampled_count": 0,
-      "oversampled_fraction": 0.0,
+      "real_available": 16000,
+      "target_total": 20000,
+      "unique_in_balanced_pool": 16000,
+      "oversampled_count": 4000,
+      "oversampled_fraction": 0.2,
+      "split_order": "split_first_then_oversample_train_only",
+      "raw_unique_available": 24000,
+      "content_hash_group_count": 24000,
+      "train_seed_count": 16000,
+      "requested_train_count": 20000,
+      "requested_val_count": 4000,
+      "requested_test_count": 4000,
       "train_count": 20000,
-      "test_count": 4000
+      "val_count": 4000,
+      "test_count": 4000,
+      "val_shortfall": 0,
+      "test_shortfall": 0,
+      "cross_split_duplicate_reference_counts": {
+        "train_val": 0,
+        "train_test": 0,
+        "val_test": 0
+      }
     },
     "DoS": {
-      "real_available": 24000,
-      "target_total": 24000,
-      "unique_in_balanced_pool": 24000,
-      "oversampled_count": 0,
-      "oversampled_fraction": 0.0,
+      "real_available": 16000,
+      "target_total": 20000,
+      "unique_in_balanced_pool": 16000,
+      "oversampled_count": 4000,
+      "oversampled_fraction": 0.2,
+      "split_order": "split_first_then_oversample_train_only",
+      "raw_unique_available": 24000,
+      "content_hash_group_count": 24000,
+      "train_seed_count": 16000,
+      "requested_train_count": 20000,
+      "requested_val_count": 4000,
+      "requested_test_count": 4000,
       "train_count": 20000,
-      "test_count": 4000
+      "val_count": 4000,
+      "test_count": 4000,
+      "val_shortfall": 0,
+      "test_shortfall": 0,
+      "cross_split_duplicate_reference_counts": {
+        "train_val": 0,
+        "train_test": 0,
+        "val_test": 0
+      }
     },
     "Mirai": {
-      "real_available": 24000,
-      "target_total": 24000,
-      "unique_in_balanced_pool": 24000,
-      "oversampled_count": 0,
-      "oversampled_fraction": 0.0,
+      "real_available": 16000,
+      "target_total": 20000,
+      "unique_in_balanced_pool": 16000,
+      "oversampled_count": 4000,
+      "oversampled_fraction": 0.2,
+      "split_order": "split_first_then_oversample_train_only",
+      "raw_unique_available": 24000,
+      "content_hash_group_count": 24000,
+      "train_seed_count": 16000,
+      "requested_train_count": 20000,
+      "requested_val_count": 4000,
+      "requested_test_count": 4000,
       "train_count": 20000,
-      "test_count": 4000
+      "val_count": 4000,
+      "test_count": 4000,
+      "val_shortfall": 0,
+      "test_shortfall": 0,
+      "cross_split_duplicate_reference_counts": {
+        "train_val": 0,
+        "train_test": 0,
+        "val_test": 0
+      }
     },
     "Recon": {
-      "real_available": 21426,
-      "target_total": 24000,
-      "unique_in_balanced_pool": 21426,
-      "oversampled_count": 2574,
-      "oversampled_fraction": 0.10725,
+      "real_available": 11943,
+      "target_total": 20000,
+      "unique_in_balanced_pool": 11943,
+      "oversampled_count": 8057,
+      "oversampled_fraction": 0.40285,
+      "split_order": "split_first_then_oversample_train_only",
+      "raw_unique_available": 19943,
+      "content_hash_group_count": 19943,
+      "train_seed_count": 11943,
+      "requested_train_count": 20000,
+      "requested_val_count": 4000,
+      "requested_test_count": 4000,
       "train_count": 20000,
-      "test_count": 4000
+      "val_count": 4000,
+      "test_count": 4000,
+      "val_shortfall": 0,
+      "test_shortfall": 0,
+      "cross_split_duplicate_reference_counts": {
+        "train_val": 0,
+        "train_test": 0,
+        "val_test": 0
+      }
     },
     "Spoofing": {
-      "real_available": 24000,
-      "target_total": 24000,
-      "unique_in_balanced_pool": 24000,
-      "oversampled_count": 0,
-      "oversampled_fraction": 0.0,
+      "real_available": 6151,
+      "target_total": 20000,
+      "unique_in_balanced_pool": 6151,
+      "oversampled_count": 13849,
+      "oversampled_fraction": 0.69245,
+      "split_order": "split_first_then_oversample_train_only",
+      "raw_unique_available": 14151,
+      "content_hash_group_count": 14150,
+      "train_seed_count": 6151,
+      "requested_train_count": 20000,
+      "requested_val_count": 4000,
+      "requested_test_count": 4000,
       "train_count": 20000,
-      "test_count": 4000
+      "val_count": 4000,
+      "test_count": 4000,
+      "val_shortfall": 0,
+      "test_shortfall": 0,
+      "cross_split_duplicate_reference_counts": {
+        "train_val": 0,
+        "train_test": 0,
+        "val_test": 0
+      }
     },
     "WebBased": {
-      "real_available": 20855,
-      "target_total": 24000,
-      "unique_in_balanced_pool": 20855,
-      "oversampled_count": 3145,
-      "oversampled_fraction": 0.13104166666666667,
+      "real_available": 15126,
+      "target_total": 20000,
+      "unique_in_balanced_pool": 15126,
+      "oversampled_count": 4874,
+      "oversampled_fraction": 0.2437,
+      "split_order": "split_first_then_oversample_train_only",
+      "raw_unique_available": 23126,
+      "content_hash_group_count": 23108,
+      "train_seed_count": 15126,
+      "requested_train_count": 20000,
+      "requested_val_count": 4000,
+      "requested_test_count": 4000,
       "train_count": 20000,
-      "test_count": 4000
+      "val_count": 4000,
+      "test_count": 4000,
+      "val_shortfall": 0,
+      "test_shortfall": 0,
+      "cross_split_duplicate_reference_counts": {
+        "train_val": 0,
+        "train_test": 0,
+        "val_test": 0
+      }
     },
     "BruteForce": {
-      "real_available": 11043,
-      "target_total": 24000,
-      "unique_in_balanced_pool": 11043,
-      "oversampled_count": 12957,
-      "oversampled_fraction": 0.539875,
+      "real_available": 3043,
+      "target_total": 20000,
+      "unique_in_balanced_pool": 3043,
+      "oversampled_count": 16957,
+      "oversampled_fraction": 0.84785,
+      "split_order": "split_first_then_oversample_train_only",
+      "raw_unique_available": 11043,
+      "content_hash_group_count": 11038,
+      "train_seed_count": 3043,
+      "requested_train_count": 20000,
+      "requested_val_count": 4000,
+      "requested_test_count": 4000,
       "train_count": 20000,
-      "test_count": 4000
+      "val_count": 4000,
+      "test_count": 4000,
+      "val_shortfall": 0,
+      "test_shortfall": 0,
+      "cross_split_duplicate_reference_counts": {
+        "train_val": 0,
+        "train_test": 0,
+        "val_test": 0
+      }
     }
   },
   "train_per_class": {
@@ -178,6 +298,16 @@ Generated: `2026-06-17T17:02:18+00:00`
     "WebBased": 20000,
     "BruteForce": 20000
   },
+  "val_per_class": {
+    "Benign": 4000,
+    "DDoS": 4000,
+    "DoS": 4000,
+    "Mirai": 4000,
+    "Recon": 4000,
+    "Spoofing": 4000,
+    "WebBased": 4000,
+    "BruteForce": 4000
+  },
   "test_per_class": {
     "Benign": 4000,
     "DDoS": 4000,
@@ -189,6 +319,9 @@ Generated: `2026-06-17T17:02:18+00:00`
     "BruteForce": 4000
   },
   "skipped_zero_packet_flows": 0,
+  "mac_filter_enabled": true,
+  "attacker_mac_count": 9,
+  "mac_filter_summaries": {},
   "skipped_files_after_reservoir_fill_count": 0,
   "skipped_files_after_reservoir_fill_sample": []
 }

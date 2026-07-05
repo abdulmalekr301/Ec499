@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -12,8 +13,10 @@ RAW_CSV_DIR = RAW_DATA_DIR / "CSV"
 PROCESSED_DIR = ROOT_DIR / "data" / "processed"
 GRAPH_DIR = ROOT_DIR / "data" / "graphs"
 GRAPH_TRAIN_DIR = GRAPH_DIR / "train"
+GRAPH_VAL_DIR = GRAPH_DIR / "val"
 GRAPH_TEST_DIR = GRAPH_DIR / "test"
 GRAPH_TRAIN_SHARD_DIR = GRAPH_DIR / "train_shards"
+GRAPH_VAL_SHARD_DIR = GRAPH_DIR / "val_shards"
 GRAPH_TEST_SHARD_DIR = GRAPH_DIR / "test_shards"
 GRAPH_RESERVOIR_DIR = GRAPH_DIR / "_reservoir"
 PCAP_CHUNK_DIR = RAW_DATA_DIR / "pcap_chunks"
@@ -43,6 +46,36 @@ HGNN_CHECKPOINT_PATH = ARTIFACTS_DIR / "best_hgnn.pt"
 HGNN_TORCHSCRIPT_PATH = ARTIFACTS_DIR / "secureedge_hgnn.ts"
 TRAINING_RUNS_DIR = ARTIFACTS_DIR / "training_runs"
 RESUME_CHECKPOINT_PATH = Path(os.getenv("SECUREEDGE_RESUME_CHECKPOINT_PATH", str(HGNN_CHECKPOINT_PATH)))
+
+
+def normalize_mac_address(value: object) -> str:
+    text = str(value or "").strip().lower().replace("-", ":").replace(".", "")
+    if not text:
+        return ""
+    if ":" in text:
+        parts = [part.zfill(2) for part in text.split(":") if part]
+        if len(parts) == 6 and all(len(part) == 2 for part in parts):
+            return ":".join(parts)
+    hex_only = "".join(char for char in text if char in "0123456789abcdef")
+    if len(hex_only) == 12:
+        return ":".join(hex_only[index : index + 2] for index in range(0, 12, 2))
+    return text
+
+
+def parse_mac_set(raw: str) -> set[str]:
+    values = re.split(r"[\s,;]+", raw.strip()) if raw.strip() else []
+    return {normalized for value in values if (normalized := normalize_mac_address(value))}
+
+
+def parse_mac_file(path_value: str) -> set[str]:
+    if not path_value.strip():
+        return set()
+    path = Path(path_value)
+    if not path.is_absolute():
+        path = ROOT_DIR / path
+    if not path.exists():
+        raise FileNotFoundError(f"Attacker MAC file not found: {path}")
+    return parse_mac_set(path.read_text(encoding="utf-8"))
 
 LABEL_COLUMNS = ("Attack_type", "label", "Label")
 LABEL_COLUMN = "label"
@@ -92,6 +125,7 @@ CLASS_NAMES = [
     "BruteForce",
 ]
 CLASS_TO_INDEX = {name: idx for idx, name in enumerate(CLASS_NAMES)}
+MAC_FILTERED_CLASSES = {"DDoS", "DoS", "Mirai", "Recon", "Spoofing"}
 
 SUBTYPE_TO_CLASS = {
     "DDoS-ACK_Fragmentation": "DDoS",
@@ -144,6 +178,7 @@ WEB_BASED_LABELS = {
 
 RANDOM_SEED = 42
 TEST_SAMPLES_PER_CLASS = int(os.getenv("SECUREEDGE_TEST_SAMPLES_PER_CLASS", "4000"))
+VAL_SAMPLES_PER_CLASS = int(os.getenv("SECUREEDGE_VAL_SAMPLES_PER_CLASS", "4000"))
 TRAIN_SAMPLES_PER_CLASS = int(os.getenv("SECUREEDGE_TRAIN_SAMPLES_PER_CLASS", "20000"))
 TEMPORAL_WINDOW_SIZE = 375
 
@@ -289,13 +324,21 @@ INPUT_DIM = N_FLOW_NODE_FEATURES
 MLP_HIDDEN_DIMS = (256, 128, 64)
 DROPOUT_RATE = 0.4
 BATCH_SIZE = int(os.getenv("SECUREEDGE_BATCH_SIZE", "512"))
+GRAD_ACCUM_STEPS = int(os.getenv("SECUREEDGE_GRAD_ACCUM_STEPS", "1"))
+EVAL_BATCH_SIZE = int(os.getenv("SECUREEDGE_EVAL_BATCH_SIZE", str(BATCH_SIZE)))
+USE_AMP = os.getenv("SECUREEDGE_USE_AMP", "1") == "1"
 HGNN_HIDDEN_SIZE = 64
 HGNN_ATTN_SIZE = 32
 HGNN_LEAKY_RELU_SLOPE = 0.01
+USE_PAYLOAD_ENCODER = os.getenv("SECUREEDGE_USE_PAYLOAD_ENCODER", "0") == "1"
+PAYLOAD_ENCODER_CHANNELS = 32
+PAYLOAD_ENCODER_KERNEL_SIZE = 7
+PAYLOAD_ENCODER_DROPOUT = 0.1
+HGNN_READOUT_MODE = os.getenv("SECUREEDGE_HGNN_READOUT_MODE", "concat").lower()
 WARMUP_START_LR = float(os.getenv("SECUREEDGE_LR_START", "3e-4"))
 LEARNING_RATE = float(os.getenv("SECUREEDGE_LR_TARGET", "3e-3"))
 MIN_LEARNING_RATE = float(os.getenv("SECUREEDGE_LR_MIN", "1e-5"))
-WARMUP_EPOCHS = 5
+WARMUP_EPOCHS = int(os.getenv("SECUREEDGE_WARMUP_EPOCHS", "5"))
 WEIGHT_DECAY = 1e-5
 MAX_EPOCHS = int(os.getenv("SECUREEDGE_MAX_EPOCHS", "300"))
 EARLY_STOPPING_PATIENCE = int(os.getenv("SECUREEDGE_EARLY_STOP", os.getenv("SECUREEDGE_EARLY_STOPPING_PATIENCE", "50")))
@@ -305,6 +348,7 @@ COSINE_T0 = int(os.getenv("SECUREEDGE_COSINE_T0", "50"))
 COSINE_T_MULT = int(os.getenv("SECUREEDGE_COSINE_T_MULT", "2"))
 LABEL_SMOOTHING = float(os.getenv("SECUREEDGE_LABEL_SMOOTHING", "0.0"))
 GRAD_CLIP_MAX_NORM = 1.0
+PRINT_CLASS_EVERY = int(os.getenv("SECUREEDGE_PRINT_CLASS_EVERY", "10"))
 NUM_WORKERS = int(os.getenv("SECUREEDGE_NUM_WORKERS", "0"))
 PREFETCH_FACTOR = int(os.getenv("SECUREEDGE_PREFETCH_FACTOR", "2"))
 TRAIN_LIMIT_PER_CLASS = int(os.getenv("SECUREEDGE_TRAIN_LIMIT_PER_CLASS", "0"))
@@ -315,6 +359,10 @@ GRAPH_SHARD_SIZE = int(os.getenv("SECUREEDGE_GRAPH_SHARD_SIZE", "1000"))
 RESUME_FROM_CHECKPOINT = os.getenv("SECUREEDGE_RESUME_FROM_CHECKPOINT", "0") == "1"
 RESUME_LOAD_OPTIMIZER = os.getenv("SECUREEDGE_RESUME_LOAD_OPTIMIZER", "1") == "1"
 RESUME_LOAD_SCHEDULER = os.getenv("SECUREEDGE_RESUME_LOAD_SCHEDULER", "1") == "1"
+ENABLE_ATTACKER_MAC_FILTER = os.getenv("SECUREEDGE_ENABLE_ATTACKER_MAC_FILTER", "0") == "1"
+BENIGN_ONLY_ENFORCE = os.getenv("SECUREEDGE_BENIGN_ONLY_ENFORCE", "1") == "1"
+ATTACKER_MACS_FILE = os.getenv("SECUREEDGE_ATTACKER_MACS_FILE", "")
+ATTACKER_MACS = parse_mac_set(os.getenv("SECUREEDGE_ATTACKER_MACS", "")) | parse_mac_file(ATTACKER_MACS_FILE)
 
 FLOW_PACKET_LIMIT = 20
 FLOW_IDLE_TIMEOUT_SECONDS = 120.0

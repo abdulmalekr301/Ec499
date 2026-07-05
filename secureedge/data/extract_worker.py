@@ -68,12 +68,41 @@ def save_compact_record(record: dict[str, object], directory: Path, subtype: str
     return path
 
 
+def mac_filter_decision(flow_record: dict[str, object], class_name: str) -> tuple[bool, str]:
+    if not config.ENABLE_ATTACKER_MAC_FILTER:
+        return True, "disabled"
+    if not config.ATTACKER_MACS:
+        raise ValueError(
+            "SECUREEDGE_ENABLE_ATTACKER_MAC_FILTER=1 requires SECUREEDGE_ATTACKER_MACS to contain "
+            "the CIC-IoT2023 attacker MAC addresses."
+        )
+    src_mac = config.normalize_mac_address(flow_record.get("src_mac", ""))
+    dst_mac = config.normalize_mac_address(flow_record.get("dst_mac", ""))
+    if not src_mac and not dst_mac:
+        return True, "missing_mac_kept"
+    attacker_involved = src_mac in config.ATTACKER_MACS or dst_mac in config.ATTACKER_MACS
+    if class_name == "Benign":
+        if config.BENIGN_ONLY_ENFORCE and attacker_involved:
+            return False, "benign_attacker_dropped"
+        return True, "benign_kept"
+    if class_name not in config.MAC_FILTERED_CLASSES:
+        return True, "class_conditional_unfiltered"
+    if attacker_involved:
+        return True, "attack_attacker_kept"
+    return False, "attack_background_dropped"
+
+
 def extract(args: argparse.Namespace) -> dict[str, object]:
     rng = np.random.default_rng(args.seed)
     out_dir = Path(args.out_dir)
     reservoir: list[Path] = []
     seen = 0
     skipped_zero_packet = 0
+    kept_by_mac_filter = 0
+    dropped_by_mac_filter = 0
+    missing_mac_kept = 0
+    mac_filter_reasons: dict[str, int] = {}
+    first_flow_macs: list[dict[str, object]] = []
     stopped_reason = "target_reached"
     chunks_used = 0
 
@@ -86,6 +115,15 @@ def extract(args: argparse.Namespace) -> dict[str, object]:
             "seen": seen,
             "stored": len(reservoir),
             "skipped_zero_packet": skipped_zero_packet,
+            "mac_filter": {
+                "enabled": config.ENABLE_ATTACKER_MAC_FILTER,
+                "attacker_mac_count": len(config.ATTACKER_MACS),
+                "kept": kept_by_mac_filter,
+                "dropped": dropped_by_mac_filter,
+                "missing_mac_kept": missing_mac_kept,
+                "reasons": mac_filter_reasons,
+                "first_flow_macs": first_flow_macs,
+            },
             "stopped_reason": reason,
             "chunks_used": chunks_used,
             "paths": [],
@@ -106,6 +144,24 @@ def extract(args: argparse.Namespace) -> dict[str, object]:
                     stopped_reason = reason
                     break
                 for emitted, flow_record in enumerate(iter_flow_records(chunk_path, args.subtype, extractor), start=1):
+                    if len(first_flow_macs) < 5:
+                        first_flow_macs.append(
+                            {
+                                "source_file": str(flow_record.get(config.SOURCE_FILE_COLUMN, chunk_path.name)),
+                                "source_order": int(flow_record.get(config.SOURCE_ORDER_COLUMN, emitted - 1)),
+                                "src_mac": str(flow_record.get("src_mac", "")),
+                                "dst_mac": str(flow_record.get("dst_mac", "")),
+                            }
+                        )
+                    keep_flow, filter_reason = mac_filter_decision(flow_record, args.class_name)
+                    mac_filter_reasons[filter_reason] = mac_filter_reasons.get(filter_reason, 0) + 1
+                    if not keep_flow:
+                        dropped_by_mac_filter += 1
+                        continue
+                    kept_by_mac_filter += 1
+                    if filter_reason == "missing_mac_kept":
+                        missing_mac_kept += 1
+
                     if emitted % args.memory_check_interval == 0:
                         ok, reason = memory_ok(args.max_rss_gb, args.min_available_gb)
                         if not ok:
@@ -117,6 +173,15 @@ def extract(args: argparse.Namespace) -> dict[str, object]:
                                 "seen": seen,
                                 "stored": len(reservoir),
                                 "skipped_zero_packet": skipped_zero_packet,
+                                "mac_filter": {
+                                    "enabled": config.ENABLE_ATTACKER_MAC_FILTER,
+                                    "attacker_mac_count": len(config.ATTACKER_MACS),
+                                    "kept": kept_by_mac_filter,
+                                    "dropped": dropped_by_mac_filter,
+                                    "missing_mac_kept": missing_mac_kept,
+                                    "reasons": mac_filter_reasons,
+                                    "first_flow_macs": first_flow_macs,
+                                },
                                 "stopped_reason": stopped_reason,
                                 "chunks_used": chunks_used,
                                 "paths": [str(path) for path in reservoir],
@@ -170,6 +235,15 @@ def extract(args: argparse.Namespace) -> dict[str, object]:
         "seen": seen,
         "stored": len(reservoir),
         "skipped_zero_packet": skipped_zero_packet,
+        "mac_filter": {
+            "enabled": config.ENABLE_ATTACKER_MAC_FILTER,
+            "attacker_mac_count": len(config.ATTACKER_MACS),
+            "kept": kept_by_mac_filter,
+            "dropped": dropped_by_mac_filter,
+            "missing_mac_kept": missing_mac_kept,
+            "reasons": mac_filter_reasons,
+            "first_flow_macs": first_flow_macs,
+        },
         "stopped_reason": stopped_reason,
         "chunks_used": chunks_used,
         "paths": [str(path) for path in reservoir],

@@ -206,6 +206,13 @@ def active_idle_feature_dict(flow: object) -> dict[str, float]:
     }
 
 
+def flow_mac_pair(flow_data: dict[str, Any]) -> tuple[str, str]:
+    return (
+        config.normalize_mac_address(flow_data.get("src_mac", "")),
+        config.normalize_mac_address(flow_data.get("dst_mac", "")),
+    )
+
+
 def nfstream_to_temporal_dict(flow_data: dict[str, Any]) -> dict[str, Any]:
     return {
         "Dst IP": flow_data.get("dst_ip", "global"),
@@ -262,6 +269,7 @@ def iter_flow_records(
     for source_order, flow in enumerate(streamer):
         flow_data = flow_to_dict(flow)
         flow_data.update(active_idle_feature_dict(flow))
+        src_mac, dst_mac = flow_mac_pair(flow_data)
         feature_values = nfstream_feature_dict(flow_data)
         temporal_values = extractor.transform_row(nfstream_to_temporal_dict(flow_data))
         first_seen_ms = float(flow_data.get("bidirectional_first_seen_ms", 0) or 0)
@@ -275,6 +283,8 @@ def iter_flow_records(
             "timestamp": first_seen_ms / 1000.0,
             "src_ip": flow_data.get("src_ip", ""),
             "dst_ip": flow_data.get("dst_ip", ""),
+            "src_mac": src_mac,
+            "dst_mac": dst_mac,
             "src_port": flow_data.get("src_port", 0),
             "dst_port": flow_data.get("dst_port", 0),
             "protocol": flow_data.get("protocol", 0),

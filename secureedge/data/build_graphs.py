@@ -47,10 +47,12 @@ def build_graphs() -> dict[str, object]:
     ensure_directories()
     manifest = load_compact_manifest()
     train_records = paths_from_manifest(manifest, "train")
+    val_records = paths_from_manifest(manifest, "val")
     test_records = paths_from_manifest(manifest, "test")
     validate_compact_feature_version(train_records)
+    validate_compact_feature_version(val_records)
     validate_compact_feature_version(test_records)
-    graph_manifest = save_graph_dataset(train_records, test_records)
+    graph_manifest = save_graph_dataset(train_records, val_records, test_records)
 
     write_context(
         "17_build_graphs.md",
@@ -62,6 +64,7 @@ def build_graphs() -> dict[str, object]:
             "- Fitted link-edge p99 normalization on training link deltas only.",
             "- Converted compact pickle records into PyG `HeteroData` graph objects.",
             f"- Saved training graphs under `{config.GRAPH_TRAIN_DIR}`.",
+            f"- Saved validation graphs under `{config.GRAPH_VAL_DIR}`.",
             f"- Saved test graphs under `{config.GRAPH_TEST_DIR}`.",
             f"- Saved graph manifest to `{config.GRAPH_MANIFEST_PATH}`.",
             "",
@@ -70,8 +73,10 @@ def build_graphs() -> dict[str, object]:
             json.dumps(
                 {
                     "n_train": graph_manifest["n_train"],
+                    "n_val": graph_manifest["n_val"],
                     "n_test": graph_manifest["n_test"],
                     "class_counts_train": graph_manifest["class_counts_train"],
+                    "class_counts_val": graph_manifest["class_counts_val"],
                     "class_counts_test": graph_manifest["class_counts_test"],
                     "feature_dimensions": graph_manifest["feature_dimensions"],
                     "scalers": graph_manifest["scalers"],
@@ -91,6 +96,7 @@ def main() -> None:
             {
                 "graph_manifest": str(config.GRAPH_MANIFEST_PATH),
                 "n_train": manifest["n_train"],
+                "n_val": manifest["n_val"],
                 "n_test": manifest["n_test"],
             },
             indent=2,

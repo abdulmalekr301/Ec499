@@ -1,6 +1,6 @@
 # Graph Construction From Compact Records
 
-Generated: `2026-06-17T17:05:54+00:00`
+Generated: `2026-07-04T21:49:00+00:00`
 
 ## Action
 - Loaded compact records from `/var/home/alucard-00/EC499/artifacts/compact_reservoir_manifest.json`.
@@ -8,6 +8,7 @@ Generated: `2026-06-17T17:05:54+00:00`
 - Fitted link-edge p99 normalization on training link deltas only.
 - Converted compact pickle records into PyG `HeteroData` graph objects.
 - Saved training graphs under `/var/home/alucard-00/EC499/data/graphs/train`.
+- Saved validation graphs under `/var/home/alucard-00/EC499/data/graphs/val`.
 - Saved test graphs under `/var/home/alucard-00/EC499/data/graphs/test`.
 - Saved graph manifest to `/var/home/alucard-00/EC499/artifacts/graph_dataset_manifest.json`.
 
@@ -15,6 +16,7 @@ Generated: `2026-06-17T17:05:54+00:00`
 ```json
 {
   "n_train": 160000,
+  "n_val": 32000,
   "n_test": 32000,
   "class_counts_train": {
     "Benign": 20000,
@@ -25,6 +27,16 @@ Generated: `2026-06-17T17:05:54+00:00`
     "Spoofing": 20000,
     "WebBased": 20000,
     "BruteForce": 20000
+  },
+  "class_counts_val": {
+    "Benign": 4000,
+    "DDoS": 4000,
+    "DoS": 4000,
+    "Mirai": 4000,
+    "Recon": 4000,
+    "Spoofing": 4000,
+    "WebBased": 4000,
+    "BruteForce": 4000
   },
   "class_counts_test": {
     "Benign": 4000,

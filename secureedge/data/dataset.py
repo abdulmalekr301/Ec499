@@ -39,6 +39,6 @@ def split_paths(split: str, limit_per_class: int = 0) -> list[str]:
 
 
 def load_graph_dataset(split: str, limit_per_class: int = 0) -> GraphFileDataset:
-    if split not in {"train", "test"}:
-        raise ValueError("split must be 'train' or 'test'")
+    if split not in {"train", "val", "test"}:
+        raise ValueError("split must be one of: 'train', 'val', 'test'")
     return GraphFileDataset(split_paths(split, limit_per_class=limit_per_class))

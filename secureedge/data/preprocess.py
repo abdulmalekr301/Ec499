@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import pickle
 import os
 import re
@@ -154,11 +155,14 @@ def subtypes_for_class(class_name: str) -> list[str]:
 
 
 def per_subtype_target(class_name: str) -> int:
-    return int(np.ceil((config.TRAIN_SAMPLES_PER_CLASS + config.TEST_SAMPLES_PER_CLASS) / len(subtypes_for_class(class_name))))
+    split_total = config.TRAIN_SAMPLES_PER_CLASS + config.VAL_SAMPLES_PER_CLASS + config.TEST_SAMPLES_PER_CLASS
+    return int(np.ceil(split_total / len(subtypes_for_class(class_name))))
 
 
 def total_requested_graphs() -> int:
-    return config.N_CLASSES * (config.TRAIN_SAMPLES_PER_CLASS + config.TEST_SAMPLES_PER_CLASS)
+    return config.N_CLASSES * (
+        config.TRAIN_SAMPLES_PER_CLASS + config.VAL_SAMPLES_PER_CLASS + config.TEST_SAMPLES_PER_CLASS
+    )
 
 
 def assert_full_run_is_allowed(pcap_files: list[Path]) -> None:
@@ -231,6 +235,16 @@ def sample_graphs(graphs: list[Path], size: int, rng: np.random.Generator, repla
     return [graphs[int(index)] for index in indices]
 
 
+def compact_content_hash(path: Path) -> str:
+    with path.open("rb") as handle:
+        record = pickle.load(handle)
+    h = hashlib.sha256()
+    for key in ("flow_x", "packet_x_uint8", "contain_edge_attr", "link_edge_attr"):
+        h.update(np.asarray(record[key]).tobytes())
+    h.update(str(record["label"]).encode("utf-8"))
+    return h.hexdigest()
+
+
 def balance_to_target(records: list[Path], target: int, rng: np.random.Generator) -> tuple[list[Path], dict[str, object]]:
     if not records:
         raise ValueError("Cannot balance an empty graph pool.")
@@ -252,12 +266,79 @@ def balance_to_target(records: list[Path], target: int, rng: np.random.Generator
     return balanced, metadata
 
 
+def split_without_cross_split_duplicates(
+    records: list[Path],
+    rng: np.random.Generator,
+) -> tuple[list[Path], list[Path], list[Path], dict[str, object]]:
+    unique_records = list(dict.fromkeys(records))
+    hash_groups: dict[str, list[Path]] = {}
+    for path in unique_records:
+        hash_groups.setdefault(compact_content_hash(path), []).append(path)
+    groups = list(hash_groups.values())
+    rng.shuffle(groups)
+
+    requested_test = config.TEST_SAMPLES_PER_CLASS
+    requested_val = config.VAL_SAMPLES_PER_CLASS
+    train_groups: list[list[Path]] = []
+    val_groups: list[list[Path]] = []
+    test_groups: list[list[Path]] = []
+    train_seed_count = 0
+    val_count = 0
+    test_count = 0
+
+    for index, group in enumerate(groups):
+        remaining_groups_after_this = len(groups) - index - 1
+        group_size = len(group)
+        if remaining_groups_after_this == 0 and not train_groups:
+            train_groups.append(group)
+            train_seed_count += group_size
+        elif test_count < requested_test and (test_count <= val_count or val_count >= requested_val):
+            test_groups.append(group)
+            test_count += group_size
+        elif val_count < requested_val:
+            val_groups.append(group)
+            val_count += group_size
+        else:
+            train_groups.append(group)
+            train_seed_count += group_size
+
+    class_test = [path for group in test_groups for path in group]
+    class_val = [path for group in val_groups for path in group]
+    train_seed = [path for group in train_groups for path in group]
+    if not train_seed:
+        raise ValueError("Cannot build a train split after reserving validation/test records.")
+
+    class_train, train_summary = balance_to_target(train_seed, config.TRAIN_SAMPLES_PER_CLASS, rng)
+    split_overlap = {
+        "train_val": len(set(class_train) & set(class_val)),
+        "train_test": len(set(class_train) & set(class_test)),
+        "val_test": len(set(class_val) & set(class_test)),
+    }
+    metadata = {
+        **train_summary,
+        "split_order": "split_first_then_oversample_train_only",
+        "raw_unique_available": len(unique_records),
+        "content_hash_group_count": len(groups),
+        "train_seed_count": len(train_seed),
+        "requested_train_count": config.TRAIN_SAMPLES_PER_CLASS,
+        "requested_val_count": requested_val,
+        "requested_test_count": requested_test,
+        "train_count": len(class_train),
+        "val_count": len(class_val),
+        "test_count": len(class_test),
+        "val_shortfall": max(0, requested_val - len(class_val)),
+        "test_shortfall": max(0, requested_test - len(class_test)),
+        "cross_split_duplicate_reference_counts": split_overlap,
+    }
+    return class_train, class_val, class_test, metadata
+
+
 def build_balanced_splits(
     subtype_reservoirs: dict[str, list[Path]],
     rng: np.random.Generator,
-) -> tuple[list[Path], list[Path], dict[str, dict[str, object]], dict[str, int]]:
-    target_total = config.TRAIN_SAMPLES_PER_CLASS + config.TEST_SAMPLES_PER_CLASS
+) -> tuple[list[Path], list[Path], list[Path], dict[str, dict[str, object]], dict[str, int]]:
     train_graphs: list[Path] = []
+    val_graphs: list[Path] = []
     test_graphs: list[Path] = []
     class_pool_counts: dict[str, int] = {}
     oversampling_summary: dict[str, dict[str, object]] = {}
@@ -268,19 +349,15 @@ def build_balanced_splits(
         if not class_graphs:
             raise ValueError(f"Class {class_name} has no graph samples after subtype reservoir extraction.")
         class_pool_counts[class_name] = len(class_graphs)
-        balanced_pool, class_summary = balance_to_target(class_graphs, target_total, rng)
-        class_test = balanced_pool[: config.TEST_SAMPLES_PER_CLASS]
-        class_train = balanced_pool[config.TEST_SAMPLES_PER_CLASS :]
-        oversampling_summary[class_name] = {
-            **class_summary,
-            "train_count": len(class_train),
-            "test_count": len(class_test),
-        }
+        class_train, class_val, class_test, class_summary = split_without_cross_split_duplicates(class_graphs, rng)
+        oversampling_summary[class_name] = class_summary
         train_graphs.extend(class_train)
+        val_graphs.extend(class_val)
         test_graphs.extend(class_test)
     rng.shuffle(train_graphs)
+    rng.shuffle(val_graphs)
     rng.shuffle(test_graphs)
-    return train_graphs, test_graphs, oversampling_summary, class_pool_counts
+    return train_graphs, val_graphs, test_graphs, oversampling_summary, class_pool_counts
 
 
 def load_existing_subtype_reservoirs() -> dict[str, list[Path]]:
@@ -392,6 +469,7 @@ def run_extraction_worker(paths: list[Path], subtype: str, class_name: str, clas
 
 def write_compact_manifest(
     train_graphs: list[Path],
+    val_graphs: list[Path],
     test_graphs: list[Path],
     source: dict[str, object],
     seen_counts: dict[str, int],
@@ -400,16 +478,21 @@ def write_compact_manifest(
     oversampling_summary: dict[str, dict[str, object]],
     skipped_zero_packet_flows: int,
     skipped_files: list[str],
+    mac_filter_summaries: dict[str, object],
     context_action_lines: list[str],
 ) -> dict[str, object]:
     manifest = {
-        "total_compact_count": len(train_graphs) + len(test_graphs),
-        "split_strategy": "xgnid_balanced_pool_then_split",
+        "total_compact_count": len(train_graphs) + len(val_graphs) + len(test_graphs),
+        "split_strategy": "split_first_then_oversample_train_only",
         "source": source,
         "splits": {
             "train": {
                 "count": len(train_graphs),
                 "paths": [str(path) for path in train_graphs],
+            },
+            "val": {
+                "count": len(val_graphs),
+                "paths": [str(path) for path in val_graphs],
             },
             "test": {
                 "count": len(test_graphs),
@@ -425,11 +508,18 @@ def write_compact_manifest(
                 class_name: sum(1 for path in train_graphs if graph_class_name(path) == class_name)
                 for class_name in config.CLASS_NAMES
             },
+            "val_per_class": {
+                class_name: sum(1 for path in val_graphs if graph_class_name(path) == class_name)
+                for class_name in config.CLASS_NAMES
+            },
             "test_per_class": {
                 class_name: sum(1 for path in test_graphs if graph_class_name(path) == class_name)
                 for class_name in config.CLASS_NAMES
             },
             "skipped_zero_packet_flows": skipped_zero_packet_flows,
+            "mac_filter_enabled": config.ENABLE_ATTACKER_MAC_FILTER,
+            "attacker_mac_count": len(config.ATTACKER_MACS),
+            "mac_filter_summaries": mac_filter_summaries,
             "skipped_files_after_reservoir_fill_count": len(skipped_files),
             "skipped_files_after_reservoir_fill_sample": skipped_files[:25],
         },
@@ -441,7 +531,7 @@ def write_compact_manifest(
         [
             "## Action",
             *context_action_lines,
-            "- Applied XG-NID balanced-pool splitting: balance each class to train+test target first, then split 4,000 test and 20,000 train records.",
+            "- Applied leakage-safe splitting: reserve validation/test records first, then oversample the train split only.",
             f"- Saved compact reservoir manifest to `{config.COMPACT_RESERVOIR_MANIFEST_PATH}`.",
             "",
             "## Counts",
@@ -458,11 +548,14 @@ def resplit_existing_reservoir() -> tuple[Path, Path]:
     assert_memory_available("resplit startup")
     subtype_reservoirs = load_existing_subtype_reservoirs()
     rng = np.random.default_rng(config.RANDOM_SEED)
-    train_graphs, test_graphs, oversampling_summary, class_pool_counts = build_balanced_splits(subtype_reservoirs, rng)
+    train_graphs, val_graphs, test_graphs, oversampling_summary, class_pool_counts = build_balanced_splits(
+        subtype_reservoirs, rng
+    )
     stored_counts = {subtype: len(paths) for subtype, paths in subtype_reservoirs.items()}
     source = compact_manifest_source_from_existing()
     write_compact_manifest(
         train_graphs,
+        val_graphs,
         test_graphs,
         source,
         seen_counts=stored_counts,
@@ -471,6 +564,7 @@ def resplit_existing_reservoir() -> tuple[Path, Path]:
         oversampling_summary=oversampling_summary,
         skipped_zero_packet_flows=0,
         skipped_files=[],
+        mac_filter_summaries={},
         context_action_lines=[
             f"- Reused existing compact reservoir under `{config.GRAPH_RESERVOIR_DIR}`.",
             "- Did not rerun NFStream extraction or modify raw compact records.",
@@ -483,8 +577,14 @@ def resplit_existing_reservoir() -> tuple[Path, Path]:
         [
             "## Action",
             f"- Rebuilt `{config.COMPACT_RESERVOIR_MANIFEST_PATH}` from the existing compact reservoir.",
-            "- Balanced each canonical class to 24,000 records using random undersampling/oversampling.",
-            "- Split each balanced class pool into 20,000 train and 4,000 test records.",
+            (
+                "- Rebuilt train/validation/test splits without allowing compact record references "
+                "to overlap across splits."
+            ),
+            (
+                f"- Oversampled train only to {config.TRAIN_SAMPLES_PER_CLASS:,} records per class; "
+                "validation/test remain held-out unique records and may be smaller for underrepresented classes."
+            ),
             "",
             "## Oversampling Summary",
             "```json",
@@ -493,6 +593,68 @@ def resplit_existing_reservoir() -> tuple[Path, Path]:
         ],
     )
     return config.GRAPH_RESERVOIR_DIR, config.COMPACT_RESERVOIR_MANIFEST_PATH
+
+
+def regenerate_selected_subtype_reservoirs(selected_subtypes: list[str]) -> tuple[Path, Path]:
+    ensure_directories()
+    assert_memory_available("selected subtype regeneration startup")
+    pcap_groups = discover_pcap_groups()
+    normalized = [subtype.strip() for subtype in selected_subtypes if subtype.strip()]
+    if not normalized:
+        raise ValueError("No subtypes were provided for selected regeneration.")
+
+    regenerated: dict[str, dict[str, object]] = {}
+    for subtype in normalized:
+        if subtype not in pcap_groups:
+            raise ValueError(f"Requested subtype {subtype!r} has no discovered PCAP group.")
+        class_name = canonical_label(subtype)
+        if class_name is None:
+            raise ValueError(f"Requested subtype {subtype!r} does not map to a known class.")
+        safe_subtype = subtype.replace("/", "_")
+        subtype_dir = config.GRAPH_RESERVOIR_DIR / safe_subtype
+        if subtype_dir.exists():
+            shutil.rmtree(subtype_dir)
+        subtype_target = per_subtype_target(class_name)
+        class_index = config.CLASS_TO_INDEX[class_name]
+        print(
+            f"[preprocess] regenerate {subtype} -> {class_name}/{subtype} "
+            f"files={len(pcap_groups[subtype])} target={subtype_target}",
+            flush=True,
+        )
+        summary = run_extraction_worker(pcap_groups[subtype], subtype, class_name, class_index, subtype_target)
+        regenerated[subtype] = {
+            "class_name": class_name,
+            "target": subtype_target,
+            "seen": summary.get("seen"),
+            "stored": summary.get("stored"),
+            "mac_filter": summary.get("mac_filter", {}),
+        }
+        print(
+            f"[preprocess] regenerated {subtype}: {summary.get('seen')} usable graph flows; "
+            f"stored={summary.get('stored')}",
+            flush=True,
+        )
+
+    reservoir_dir, manifest_path = resplit_existing_reservoir()
+    write_context(
+        "48_class_conditional_filtering_regeneration.md",
+        "Class-Conditional Filtering Regeneration",
+        [
+            "## Action",
+            "- Applied class-conditional MAC filtering.",
+            f"- MAC-filtered classes: `{sorted(config.MAC_FILTERED_CLASSES)}`.",
+            "- WebBased and BruteForce bypass attacker-MAC filtering and use filename/subtype labels.",
+            "- Benign remains strict and drops flows involving known attacker MACs.",
+            f"- Regenerated selected subtype reservoirs: `{normalized}`.",
+            f"- Rebuilt compact split manifest at `{manifest_path}` using split-first/train-only oversampling.",
+            "",
+            "## Regeneration Summary",
+            "```json",
+            json.dumps(regenerated, indent=2),
+            "```",
+        ],
+    )
+    return reservoir_dir, manifest_path
 
 
 def preprocess() -> tuple[Path, Path]:
@@ -529,6 +691,7 @@ def preprocess() -> tuple[Path, Path]:
     seen_counts = {subtype: 0 for subtype in config.SUBTYPE_TO_CLASS}
     stored_counts: dict[str, int] = {}
     skipped_files: list[str] = []
+    mac_filter_summaries: dict[str, object] = {}
     skipped_zero_packet_flows = 0
     rng = np.random.default_rng(config.RANDOM_SEED)
 
@@ -553,6 +716,7 @@ def preprocess() -> tuple[Path, Path]:
         subtype_reservoirs.setdefault(subtype, []).extend(paths)
         seen_counts[subtype] += int(summary["seen"])
         skipped_zero_packet_flows += int(summary["skipped_zero_packet"])
+        mac_filter_summaries[subtype] = summary.get("mac_filter", {})
         stored_counts[subtype] = len(subtype_reservoirs[subtype])
         print(
             f"[preprocess] done {subtype}: {summary['seen']} usable graph flows; "
@@ -563,7 +727,9 @@ def preprocess() -> tuple[Path, Path]:
     if not subtype_reservoirs:
         raise ValueError("No usable graph flows were extracted from the PCAP files.")
 
-    train_graphs, test_graphs, oversampling_summary, class_pool_counts = build_balanced_splits(subtype_reservoirs, rng)
+    train_graphs, val_graphs, test_graphs, oversampling_summary, class_pool_counts = build_balanced_splits(
+        subtype_reservoirs, rng
+    )
     source = {
             "pcap_dir": str(config.PCAP_DIR),
             "pcap_chunk_dir": str(config.PCAP_CHUNK_DIR),
@@ -575,6 +741,7 @@ def preprocess() -> tuple[Path, Path]:
     }
     write_compact_manifest(
         train_graphs,
+        val_graphs,
         test_graphs,
         source,
         seen_counts,
@@ -583,6 +750,7 @@ def preprocess() -> tuple[Path, Path]:
         oversampling_summary,
         skipped_zero_packet_flows,
         skipped_files,
+        mac_filter_summaries,
         [
             f"- Streamed `{len(pcap_files)}` PCAP files from `{config.PCAP_DIR}` with NFStream.",
             f"- Processed `{len(pcap_groups)}` subtype groups with one temporal extractor per subtype.",
@@ -590,6 +758,7 @@ def preprocess() -> tuple[Path, Path]:
             "- Computed the 16 temporal features during streaming, before reservoir sampling.",
             "- Wrote compact `.pkl` records only; PyTorch/PyG graph construction is handled by `secureedge.data.build_graphs`.",
             "- Used per-subtype reservoirs before class-level XG-NID oversampling.",
+            f"- Attacker-MAC filtering enabled: `{config.ENABLE_ATTACKER_MAC_FILTER}`.",
             f"- Used disk-backed temporary reservoirs under `{config.GRAPH_RESERVOIR_DIR}` to reduce peak memory use.",
         ],
     )
@@ -597,7 +766,10 @@ def preprocess() -> tuple[Path, Path]:
 
 
 def main() -> None:
-    if os.getenv("SECUREEDGE_RESPLIT_EXISTING_RESERVOIR", "0") == "1":
+    regenerate_subtypes = os.getenv("SECUREEDGE_REGENERATE_SUBTYPES", "")
+    if regenerate_subtypes.strip():
+        reservoir_dir, manifest_path = regenerate_selected_subtype_reservoirs(regenerate_subtypes.split(","))
+    elif os.getenv("SECUREEDGE_RESPLIT_EXISTING_RESERVOIR", "0") == "1":
         reservoir_dir, manifest_path = resplit_existing_reservoir()
     else:
         reservoir_dir, manifest_path = preprocess()
