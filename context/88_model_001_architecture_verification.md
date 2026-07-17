@@ -44,3 +44,19 @@ Before any office training run:
 3. Add an architecture assertion test that checks the selected convolution class.
 4. Record the selected architecture in the office training manifest.
 
+## User architecture decision
+
+On 2026-07-17, the project owner made the architecture direction explicit:
+
+- Do not switch the office model from attention-based aggregation to `SAGEConv`.
+- Keep attention-based aggregation because uniform mean aggregation is not desired for this project.
+- When the architecture-change phase begins, switch the attention operator from `GATConv` to `GATv2Conv`.
+
+The office configuration now records this policy as:
+
+```yaml
+architecture_policy:
+  current_attention_conv: GATConv
+  future_attention_conv: GATv2Conv
+  do_not_use: SAGEConv
+```

@@ -1,0 +1,247 @@
+schema_version: 1
+seed: 42
+
+paths:
+  dataset_root: datasets/cic_ids_2018
+  improved_csv: datasets/cic_ids_2018/improved-csv/CSECICIDS2018_improved
+  cicids2017_improved_csv: datasets/cic_ids_2018/improved-csv/CICIDS2017_improved
+  original_csv: datasets/cic_ids_2018/csv
+  raw_pcaps: datasets/cic_ids_2018/raw_pcaps
+  cicids2017_raw_pcap: datasets/cic_ids_2018/cic_ids_2017/raw_pcaps/Thursday-WorkingHours.pcap
+  artifacts: artifacts/office_model
+  compact_out: data/graphs/office_compact
+
+labels:
+  classes:
+    - Benign
+    - BruteForce
+    - DoS
+    - DDoS
+    - WebBased
+    - Bot
+    - Infiltration
+  label_source_priority:
+    - ip_time_window
+    - liu_improved
+    - original_csv
+  timestamp_offset_hours: 4
+
+day_specs:
+  - day: Wednesday-14-02-2018
+    target_classes: [BruteForce]
+    expected_subtypes: [FTP-BruteForce, SSH-Bruteforce]
+  - day: Friday-16-02-2018
+    target_classes: [DoS]
+    expected_subtypes: [DoS-Hulk, DoS-SlowHTTPTest]
+  - day: Wednesday-21-02-2018
+    target_classes: [DDoS]
+    expected_subtypes: [DDOS-HOIC, DDOS-LOIC-UDP]
+  - day: Thursday-22-02-2018
+    target_classes: [WebBased]
+    expected_subtypes: [Web Attack - Brute Force, Web Attack - XSS, Web Attack - SQL]
+  - day: Friday-23-02-2018
+    target_classes: [WebBased]
+    expected_subtypes: [Web Attack - Brute Force, Web Attack - XSS, Web Attack - SQL]
+  - day: Friday-02-03-2018
+    target_classes: [Bot]
+    expected_subtypes: [Bot]
+  - day: Thursday-01-03-2018
+    target_classes: [Infiltration]
+    expected_subtypes: [Infiltration]
+
+ddos_rotating_attackers:
+  - 18.218.115.60
+  - 18.219.9.1
+  - 18.219.32.43
+  - 18.218.55.126
+  - 52.14.136.135
+  - 18.219.5.43
+  - 18.216.200.189
+  - 18.218.229.235
+  - 18.218.11.51
+  - 18.216.24.42
+
+bot_victims:
+  - 172.31.69.6
+  - 172.31.69.8
+  - 172.31.69.10
+  - 172.31.69.12
+  - 172.31.69.14
+  - 172.31.69.17
+  - 172.31.69.23
+  - 172.31.69.26
+  - 172.31.69.29
+  - 172.31.69.30
+
+attack_windows:
+  - day: Wednesday-14-02-2018
+    subtype: FTP-BruteForce
+    class_name: BruteForce
+    attacker_ips: [172.31.70.4, 18.221.219.4]
+    victim_ips: [172.31.69.25, 18.217.21.148]
+    start: "2018-02-14 14:32:00"
+    finish: "2018-02-14 16:09:00"
+  - day: Wednesday-14-02-2018
+    subtype: SSH-Bruteforce
+    class_name: BruteForce
+    attacker_ips: [172.31.70.6, 13.58.98.64]
+    victim_ips: [172.31.69.25, 18.217.21.148]
+    start: "2018-02-14 18:01:00"
+    finish: "2018-02-14 19:31:00"
+  - day: Friday-16-02-2018
+    subtype: DoS-SlowHTTPTest
+    class_name: DoS
+    attacker_ips: [172.31.70.23, 13.59.126.31]
+    victim_ips: [172.31.69.25, 18.217.21.148]
+    start: "2018-02-16 14:12:00"
+    finish: "2018-02-16 15:08:00"
+  - day: Friday-16-02-2018
+    subtype: DoS-Hulk
+    class_name: DoS
+    attacker_ips: [172.31.70.16, 18.219.193.20]
+    victim_ips: [172.31.69.25, 18.217.21.148]
+    start: "2018-02-16 17:45:00"
+    finish: "2018-02-16 18:19:00"
+  - day: Wednesday-21-02-2018
+    subtype: DDOS-LOIC-UDP
+    class_name: DDoS
+    attacker_ips: ${ddos_rotating_attackers}
+    victim_ips: [172.31.69.28, 18.218.83.150]
+    start: "2018-02-21 14:09:00"
+    finish: "2018-02-21 14:43:00"
+  - day: Wednesday-21-02-2018
+    subtype: DDOS-HOIC
+    class_name: DDoS
+    attacker_ips: ${ddos_rotating_attackers}
+    victim_ips: [172.31.69.28, 18.218.83.150]
+    start: "2018-02-21 18:05:00"
+    finish: "2018-02-21 19:05:00"
+  - day: Friday-02-03-2018
+    subtype: Bot
+    class_name: Bot
+    attacker_ips: [18.219.211.138]
+    victim_ips: ${bot_victims}
+    start: "2018-03-02 14:11:00"
+    finish: "2018-03-02 19:55:00"
+  - day: Thursday-01-03-2018
+    subtype: Infiltration
+    class_name: Infiltration
+    attacker_ips: [13.58.225.34]
+    victim_ips: [172.31.69.13, 18.216.254.154]
+    start: "2018-03-01 13:53:00"
+    finish: "2018-03-01 14:55:00"
+  - day: Thursday-01-03-2018
+    subtype: Infiltration
+    class_name: Infiltration
+    attacker_ips: [13.58.225.34]
+    victim_ips: [172.31.69.13, 18.216.254.154]
+    start: "2018-03-01 18:00:00"
+    finish: "2018-03-01 19:38:00"
+  - day: Thursday-22-02-2018
+    subtype: Brute Force-Web
+    class_name: WebBased
+    attacker_ips: [18.218.115.60]
+    victim_ips: [172.31.69.28, 18.218.83.150]
+    start: "2018-02-22 14:17:00"
+    finish: "2018-02-22 15:24:00"
+  - day: Thursday-22-02-2018
+    subtype: Brute Force-XSS
+    class_name: WebBased
+    attacker_ips: [18.218.115.60]
+    victim_ips: [172.31.69.28, 18.218.83.150]
+    start: "2018-02-22 17:50:00"
+    finish: "2018-02-22 18:29:00"
+  - day: Thursday-22-02-2018
+    subtype: SQL Injection
+    class_name: WebBased
+    attacker_ips: [18.218.115.60]
+    victim_ips: [172.31.69.28, 18.218.83.150]
+    start: "2018-02-22 20:15:00"
+    finish: "2018-02-22 20:29:00"
+  - day: Friday-23-02-2018
+    subtype: Brute Force-Web
+    class_name: WebBased
+    attacker_ips: [18.218.115.60]
+    victim_ips: [172.31.69.28, 18.218.83.150]
+    start: "2018-02-23 14:03:00"
+    finish: "2018-02-23 15:03:00"
+  - day: Friday-23-02-2018
+    subtype: Brute Force-XSS
+    class_name: WebBased
+    attacker_ips: [18.218.115.60]
+    victim_ips: [172.31.69.28, 18.218.83.150]
+    start: "2018-02-23 17:00:00"
+    finish: "2018-02-23 18:10:00"
+  - day: Friday-23-02-2018
+    subtype: SQL Injection
+    class_name: WebBased
+    attacker_ips: [18.218.115.60]
+    victim_ips: [172.31.69.28, 18.218.83.150]
+    start: "2018-02-23 19:05:00"
+    finish: "2018-02-23 19:18:00"
+
+cicids2017_web_attack_windows:
+  - day: Thursday-06-07-2017
+    subtype: Brute Force-Web
+    class_name: WebBased
+    attacker_ips: [172.16.0.1, 205.174.165.73, 205.174.165.80]
+    victim_ips: [192.168.10.50, 205.174.165.68]
+    start: "2017-07-06 12:15:00"
+    finish: "2017-07-06 13:01:00"
+  - day: Thursday-06-07-2017
+    subtype: XSS
+    class_name: WebBased
+    attacker_ips: [172.16.0.1, 205.174.165.73, 205.174.165.80]
+    victim_ips: [192.168.10.50, 205.174.165.68]
+    start: "2017-07-06 13:15:00"
+    finish: "2017-07-06 13:36:00"
+  - day: Thursday-06-07-2017
+    subtype: SQL Injection
+    class_name: WebBased
+    attacker_ips: [172.16.0.1, 205.174.165.73, 205.174.165.80]
+    victim_ips: [192.168.10.50, 205.174.165.68]
+    start: "2017-07-06 13:35:00"
+    finish: "2017-07-06 13:43:00"
+
+matching:
+  timestamp_tolerance_seconds: 3.0
+  allow_reverse_direction: true
+
+slicing:
+  preslice_classes: [BruteForce, DoS, DDoS]
+  preslice_time_window_seconds: 30.0
+  max_slice_mb: 256
+
+materialization:
+  allow_full_env: SECUREEDGE_ALLOW_FULL_OFFICE_MATERIALIZATION
+  worker_rss_cap_mb: 6144
+  batch_max_candidates: 500
+  max_retries: 2
+
+splits:
+  standard:
+    train: 20000
+    val: 2000
+    test: 2000
+    candidate_pool: 24000
+  webbased:
+    native_train: 206
+    cicids2017_train_only: 167
+    train_real: 373
+    train_target: 6000
+    val: 103
+    test: 103
+  split_strategy: split_first_then_oversample_train_only
+
+graph:
+  flow_features: 92
+  packet_bytes: 1500
+  flow_packet_limit: 20
+  compact_feature_version: xgnid_76_plus_temporal_16
+
+architecture_policy:
+  current_attention_conv: GATConv
+  future_attention_conv: GATv2Conv
+  do_not_use: SAGEConv
+  rationale: "The office model should keep attention-based neighbor aggregation. SAGEConv is intentionally rejected because mean aggregation treats neighbors uniformly; GATv2Conv is reserved for the architecture-change phase."
+

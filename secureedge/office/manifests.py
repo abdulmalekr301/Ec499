@@ -14,6 +14,7 @@ from typing import Any
 import torch
 
 from secureedge import config
+from secureedge.office.config import DEFAULT_OFFICE_CONFIG_PATH, load_office_config
 
 
 DEFAULT_COMPACT_ROOT = config.GRAPH_DIR / "office_compact"
@@ -220,6 +221,7 @@ def build_cumulative_manifest(
     run_id: str,
     rejected: list[dict[str, str]],
 ) -> dict[str, Any]:
+    office_config = load_office_config(DEFAULT_OFFICE_CONFIG_PATH)
     per_class = Counter(record.class_name for record in records)
     per_split = Counter(record.split or "unknown" for record in records)
     per_source = Counter(record.source_dataset or "unknown" for record in records)
@@ -241,6 +243,7 @@ def build_cumulative_manifest(
         "pipeline": "office_compact_cumulative_manifest",
         "run_id": run_id,
         "generated_at": utc_now(),
+        **office_config.provenance(),
         "compact_root": str(compact_root.resolve()),
         "record_count": len(records),
         "rejected_count": len(rejected),
