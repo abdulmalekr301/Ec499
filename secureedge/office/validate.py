@@ -4,6 +4,7 @@ import argparse
 import json
 from collections import Counter
 from datetime import datetime, timezone
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from secureedge.office.manifests import (
 DEFAULT_GATE_REPORT_DIR = root_config.ARTIFACTS_DIR / "office_model" / "gate_reports"
 DEFAULT_GATE5_PATH = DEFAULT_GATE_REPORT_DIR / "gate5_compact_features.json"
 DEFAULT_GATE6_PATH = DEFAULT_GATE_REPORT_DIR / "gate6_graph_structure.json"
+DEFAULT_GATE7_PATH = DEFAULT_GATE_REPORT_DIR / "gate7_split_leakage.json"
 DEFAULT_OFFICE_GRAPH_MANIFEST_PATH = root_config.ARTIFACTS_DIR / "office_model" / "office_graph_dataset_manifest.json"
 
 ADDRESS_IDENTITY_PATTERNS = (
@@ -569,9 +571,198 @@ def validate_graph_dataset(
     return report
 
 
+def _split_overlap(split_sets: dict[str, set[str]]) -> dict[str, list[str]]:
+    overlaps: dict[str, list[str]] = {}
+    split_names = sorted(split_sets)
+    for index, left in enumerate(split_names):
+        for right in split_names[index + 1 :]:
+            overlap = sorted(split_sets[left] & split_sets[right])
+            if overlap:
+                overlaps[f"{left}__{right}"] = overlap[:200]
+    return overlaps
+
+
+def validate_split_leakage(
+    graph_manifest_path: Path = DEFAULT_OFFICE_GRAPH_MANIFEST_PATH,
+    config_path: Path = DEFAULT_OFFICE_CONFIG_PATH,
+    output_path: Path = DEFAULT_GATE7_PATH,
+    sample_limit: int = 200,
+) -> dict[str, Any]:
+    import torch
+
+    office_config = load_office_config(config_path)
+    graph_manifest = json.loads(graph_manifest_path.read_text(encoding="utf-8"))
+    class_names = list(graph_manifest.get("class_names") or office_config.class_names)
+
+    hard_failures: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    per_split: Counter[str] = Counter()
+    per_split_class: dict[str, Counter[str]] = {split: Counter() for split in ("train", "val", "test")}
+    per_split_source: dict[str, Counter[str]] = {split: Counter() for split in ("train", "val", "test")}
+    per_split_day: dict[str, Counter[str]] = {split: Counter() for split in ("train", "val", "test")}
+    candidate_identities_by_split: dict[str, set[str]] = {split: set() for split in ("train", "val", "test")}
+    flow_hashes_by_split: dict[str, set[str]] = {split: set() for split in ("train", "val", "test")}
+    graph_ids_by_split: dict[str, set[str]] = {split: set() for split in ("train", "val", "test")}
+    all_candidate_identities: set[str] = set()
+    all_graph_ids: set[str] = set()
+    duplicate_candidate_identities: list[str] = []
+    duplicate_graph_ids: list[str] = []
+    cicids2017_by_split: Counter[str] = Counter()
+
+    for split in ("train", "val", "test"):
+        split_info = graph_manifest["splits"][split]
+        for class_name in class_names:
+            if int(split_info["per_class"].get(class_name, 0)) == 0:
+                _record_failure(
+                    hard_failures,
+                    split,
+                    "class_missing_from_split",
+                    class_name,
+                    sample_limit,
+                )
+        for path_text in split_info.get("files", []):
+            path = Path(path_text)
+            if not path.exists():
+                _record_failure(hard_failures, path_text, "missing_graph_file", "", sample_limit)
+                continue
+            try:
+                graph = torch.load(path, map_location="cpu", weights_only=False)
+            except Exception as exc:  # noqa: BLE001 - validation reports all graph load failures.
+                _record_failure(hard_failures, path_text, "graph_load_error", f"{type(exc).__name__}: {exc}", sample_limit)
+                continue
+
+            graph_split = str(getattr(graph, "split", ""))
+            if graph_split != split:
+                _record_failure(
+                    hard_failures,
+                    path_text,
+                    "graph_split_attr_mismatch",
+                    {"attr": graph_split, "manifest_split": split},
+                    sample_limit,
+                )
+            class_name = str(getattr(graph, "class_name", ""))
+            source_dataset = str(getattr(graph, "source_dataset", "unknown"))
+            day = str(getattr(graph, "day", "unknown"))
+            candidate_identity = str(getattr(graph, "office_candidate_identity", ""))
+            flow_hash = str(getattr(graph, "flow_id_hash", ""))
+            graph_id = str(getattr(graph, "graph_id", ""))
+
+            per_split.update([split])
+            per_split_class[split].update([class_name])
+            per_split_source[split].update([source_dataset])
+            per_split_day[split].update([day])
+
+            if "2017" in source_dataset.lower():
+                cicids2017_by_split.update([split])
+                if split != "train":
+                    _record_failure(
+                        hard_failures,
+                        path_text,
+                        "cicids2017_graph_outside_train",
+                        {"split": split, "source_dataset": source_dataset},
+                        sample_limit,
+                    )
+
+            if not candidate_identity:
+                _record_failure(hard_failures, path_text, "missing_office_candidate_identity", "", sample_limit)
+            else:
+                if candidate_identity in all_candidate_identities:
+                    duplicate_candidate_identities.append(candidate_identity)
+                    _record_failure(hard_failures, path_text, "duplicate_candidate_identity", candidate_identity, sample_limit)
+                all_candidate_identities.add(candidate_identity)
+                candidate_identities_by_split[split].add(candidate_identity)
+
+            if flow_hash:
+                flow_hashes_by_split[split].add(flow_hash)
+            else:
+                _record_failure(hard_failures, path_text, "missing_flow_id_hash", "", sample_limit)
+
+            if not graph_id:
+                _record_failure(hard_failures, path_text, "missing_graph_id", "", sample_limit)
+            else:
+                if graph_id in all_graph_ids:
+                    duplicate_graph_ids.append(graph_id)
+                    _record_failure(hard_failures, path_text, "duplicate_graph_id", graph_id, sample_limit)
+                all_graph_ids.add(graph_id)
+                graph_ids_by_split[split].add(graph_id)
+
+    candidate_identity_overlaps = _split_overlap(candidate_identities_by_split)
+    flow_hash_overlaps = _split_overlap(flow_hashes_by_split)
+    graph_id_overlaps = _split_overlap(graph_ids_by_split)
+    for overlap_name, sample in candidate_identity_overlaps.items():
+        _record_failure(hard_failures, overlap_name, "cross_split_candidate_identity_overlap", sample, sample_limit)
+    for overlap_name, sample in flow_hash_overlaps.items():
+        _record_failure(hard_failures, overlap_name, "cross_split_flow_hash_overlap", sample, sample_limit)
+    for overlap_name, sample in graph_id_overlaps.items():
+        _record_failure(hard_failures, overlap_name, "cross_split_graph_id_overlap", sample, sample_limit)
+
+    if graph_manifest.get("materialization_incomplete"):
+        limited_append(
+            warnings,
+            {
+                "path": str(graph_manifest_path),
+                "reason": "materialization_incomplete",
+                "detail": "Graph manifest was built from the current partial office compact pool.",
+            },
+            sample_limit,
+        )
+
+    report = {
+        "schema_version": 1,
+        "gate": "G7_SPLIT_LEAKAGE",
+        "generated_at": utc_now(),
+        **office_config.provenance(),
+        "status": "pass" if not hard_failures else "fail",
+        "hard_failure_count": len(hard_failures),
+        "warning_count": len(warnings),
+        "hard_failures": hard_failures,
+        "warnings": warnings,
+        "graph_manifest_path": str(graph_manifest_path.resolve()),
+        "graph_manifest_hash": graph_manifest.get("manifest_hash"),
+        "record_count": sum(per_split.values()),
+        "per_split": dict(sorted(per_split.items())),
+        "per_split_class": {
+            split: {class_name: per_split_class[split].get(class_name, 0) for class_name in class_names}
+            for split in ("train", "val", "test")
+        },
+        "per_split_source_dataset": {
+            split: dict(sorted(per_split_source[split].items()))
+            for split in ("train", "val", "test")
+        },
+        "per_split_day": {
+            split: dict(sorted(per_split_day[split].items()))
+            for split in ("train", "val", "test")
+        },
+        "cicids2017_by_split": dict(sorted(cicids2017_by_split.items())),
+        "duplicate_candidate_identity_count": len(duplicate_candidate_identities),
+        "duplicate_graph_id_count": len(duplicate_graph_ids),
+        "cross_split_candidate_identity_overlap_count": sum(
+            len(candidate_identities_by_split[left] & candidate_identities_by_split[right])
+            for left, right in combinations(("train", "val", "test"), 2)
+        ),
+        "cross_split_flow_hash_overlap_count": sum(
+            len(flow_hashes_by_split[left] & flow_hashes_by_split[right])
+            for left, right in combinations(("train", "val", "test"), 2)
+        ),
+        "cross_split_graph_id_overlap_count": sum(
+            len(graph_ids_by_split[left] & graph_ids_by_split[right])
+            for left, right in combinations(("train", "val", "test"), 2)
+        ),
+        "overlap_samples": {
+            "candidate_identity": candidate_identity_overlaps,
+            "flow_hash": flow_hash_overlaps,
+            "graph_id": graph_id_overlaps,
+        },
+    }
+    report["report_hash"] = stable_json_hash({key: value for key, value in report.items() if key != "report_hash"})
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(output_path, json.dumps(report, indent=2, sort_keys=True) + "\n")
+    return report
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run office validation gates.")
-    parser.add_argument("--gate", choices=("5", "g5", "G5", "6", "g6", "G6"), required=True)
+    parser.add_argument("--gate", choices=("5", "g5", "G5", "6", "g6", "G6", "7", "g7", "G7"), required=True)
     parser.add_argument("--config", type=Path, default=DEFAULT_OFFICE_CONFIG_PATH)
     parser.add_argument("--cumulative-manifest", type=Path, default=DEFAULT_CUMULATIVE_PATH)
     parser.add_argument("--graph-manifest", type=Path, default=DEFAULT_OFFICE_GRAPH_MANIFEST_PATH)
@@ -591,9 +782,17 @@ def main() -> None:
             output_path=output_path,
             sample_limit=args.sample_limit,
         )
-    else:
+    elif gate in {"6", "g6"}:
         output_path = args.output if args.output != DEFAULT_GATE5_PATH else DEFAULT_GATE6_PATH
         report = validate_graph_dataset(
+            graph_manifest_path=args.graph_manifest,
+            config_path=args.config,
+            output_path=output_path,
+            sample_limit=args.sample_limit,
+        )
+    else:
+        output_path = args.output if args.output != DEFAULT_GATE5_PATH else DEFAULT_GATE7_PATH
+        report = validate_split_leakage(
             graph_manifest_path=args.graph_manifest,
             config_path=args.config,
             output_path=output_path,
