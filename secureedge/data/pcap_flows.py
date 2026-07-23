@@ -75,11 +75,34 @@ def pad_payload(payload: bytes) -> list[int]:
 
 
 class PacketCapture:
+    def __init__(self, flow_key_filter: set[tuple[str, str, str, str, str]] | None = None) -> None:
+        self.flow_key_filter = flow_key_filter
+
+    @staticmethod
+    def _packet_flow_key(packet: object) -> tuple[str, str, str, str, str]:
+        return (
+            str(getattr(packet, "src_ip", "") or ""),
+            str(getattr(packet, "dst_ip", "") or ""),
+            str(getattr(packet, "src_port", "") or ""),
+            str(getattr(packet, "dst_port", "") or ""),
+            str(getattr(packet, "protocol", "") or ""),
+        )
+
+    def should_capture_packet(self, packet: object) -> bool:
+        if self.flow_key_filter is None:
+            return True
+        return self._packet_flow_key(packet) in self.flow_key_filter
+
     def on_init(self, packet: object, flow: object) -> None:
         flow.udps.packet_records = []
+        flow.udps.capture_packets = self.should_capture_packet(packet)
+        if not flow.udps.capture_packets:
+            return
         self.on_update(packet, flow)
 
     def on_update(self, packet: object, flow: object) -> None:
+        if not bool(getattr(flow.udps, "capture_packets", True)):
+            return
         records = getattr(flow.udps, "packet_records", None)
         if records is None:
             records = []
@@ -234,6 +257,7 @@ def iter_flow_records(
     path: Path,
     subtype_label: str,
     extractor: TemporalFeatureExtractor | None = None,
+    flow_key_filter: set[tuple[str, str, str, str, str]] | None = None,
 ) -> Iterable[dict[str, object]]:
     try:
         from nfstream import NFPlugin, NFStreamer
@@ -263,7 +287,7 @@ def iter_flow_records(
         idle_timeout=int(config.FLOW_IDLE_TIMEOUT_SECONDS),
         active_timeout=1800,
         accounting_mode=0,
-        udps=[NFStreamActiveIdlePlugin(), NFStreamPacketCapture(), NFStreamFlowCapper()],
+        udps=[NFStreamActiveIdlePlugin(), NFStreamPacketCapture(flow_key_filter), NFStreamFlowCapper()],
     )
 
     for source_order, flow in enumerate(streamer):

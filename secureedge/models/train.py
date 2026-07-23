@@ -53,6 +53,20 @@ def training_device() -> torch.device:
     return torch.device(config.DEVICE)
 
 
+def amp_disabled_reason(device: torch.device) -> str | None:
+    if not config.USE_AMP:
+        return "SECUREEDGE_USE_AMP=0"
+    if device.type != "cuda":
+        return "device_is_not_cuda"
+    if config.GRAPH_VALUE_MODE == "raw":
+        return "raw_graph_values_can_exceed_fp16_range"
+    return None
+
+
+def amp_is_enabled(device: torch.device) -> bool:
+    return amp_disabled_reason(device) is None
+
+
 def make_loader_kwargs(device: torch.device, num_workers: int | None = None) -> dict[str, object]:
     workers = config.NUM_WORKERS if num_workers is None else num_workers
     kwargs: dict[str, object] = {
@@ -199,6 +213,7 @@ def model_signature() -> dict[str, object]:
         "hidden_size": config.HGNN_HIDDEN_SIZE,
         "attn_size": config.HGNN_ATTN_SIZE,
         "heads": 2,
+        "batchnorm_eps": config.HGNN_BATCHNORM_EPS,
         "readout_mode": config.HGNN_READOUT_MODE,
         "use_payload_encoder": config.USE_PAYLOAD_ENCODER,
     }
@@ -249,6 +264,8 @@ def write_training_history_csv(path: Path, history: list[dict[str, object]]) -> 
         "use_amp",
         "heads",
         "scheduler",
+        "scheduler_monitor",
+        "scheduler_metric",
         "stale_epochs",
         "best_f1_so_far",
         "is_best",
@@ -335,7 +352,8 @@ def write_run_markdown(
         f"grad_accum_steps={config.GRAD_ACCUM_STEPS}",
         f"effective_batch_size={config.BATCH_SIZE * config.GRAD_ACCUM_STEPS}",
         f"eval_batch_size={config.EVAL_BATCH_SIZE}",
-        f"use_amp={bool_label(config.USE_AMP and device.type == 'cuda')}",
+        f"use_amp={bool_label(amp_is_enabled(device))}",
+        f"amp_disabled_reason={amp_disabled_reason(device)}",
         f"use_graph_shards={bool_label(config.USE_GRAPH_SHARDS)}",
         "checkpoint_selection_split=val",
         f"num_workers={config.NUM_WORKERS}",
@@ -344,6 +362,8 @@ def write_run_markdown(
         f"lr_target={config.LEARNING_RATE}",
         f"lr_min={config.MIN_LEARNING_RATE}",
         f"scheduler={config.LR_SCHEDULER}",
+        f"plateau_monitor={config.PLATEAU_MONITOR}",
+        f"plateau_threshold={config.PLATEAU_THRESHOLD}",
         f"cosine_t0={config.COSINE_T0}",
         f"cosine_t_mult={config.COSINE_T_MULT}",
         f"label_smoothing={config.LABEL_SMOOTHING}",
@@ -392,6 +412,7 @@ def write_run_markdown(
                 f"{float(row['accuracy']):.6f}",
                 f"{float(row['macro_f1']):.6f}",
                 f"{float(row['learning_rate']):.8g}",
+                f"{float(row.get('scheduler_metric', 0.0)):.6f}",
                 row["stale_epochs"],
                 f"{float(row['best_f1_so_far']):.6f}",
                 row["cosine_cycle"],
@@ -402,7 +423,19 @@ def write_run_markdown(
         ]
         lines.extend(
             markdown_table(
-                ["Epoch", "Train Loss", "Val Accuracy", "Val Macro F1", "LR", "Stale", "Best Val F1", "Cycle", "Seconds", "Best"],
+                [
+                    "Epoch",
+                    "Train Loss",
+                    "Val Accuracy",
+                    "Val Macro F1",
+                    "LR",
+                    "Scheduler Metric",
+                    "Stale",
+                    "Best Val F1",
+                    "Cycle",
+                    "Seconds",
+                    "Best",
+                ],
                 rows,
             )
         )
@@ -468,13 +501,16 @@ def train() -> None:
                 "grad_accum_steps": config.GRAD_ACCUM_STEPS,
                 "effective_batch_size": config.BATCH_SIZE * config.GRAD_ACCUM_STEPS,
                 "eval_batch_size": config.EVAL_BATCH_SIZE,
-                "use_amp": bool(config.USE_AMP and str(device) == "cuda"),
+                "use_amp": amp_is_enabled(device),
+                "amp_disabled_reason": amp_disabled_reason(device),
                 "use_graph_shards": config.USE_GRAPH_SHARDS,
                 "train_limit_per_class": config.TRAIN_LIMIT_PER_CLASS,
                 "validation_limit_per_class": config.EVAL_LIMIT_PER_CLASS,
                 "eval_limit_per_class": config.EVAL_LIMIT_PER_CLASS,
                 "max_epochs": config.MAX_EPOCHS,
                 "scheduler": config.LR_SCHEDULER,
+                "plateau_monitor": config.PLATEAU_MONITOR,
+                "plateau_threshold": config.PLATEAU_THRESHOLD,
                 "label_smoothing": config.LABEL_SMOOTHING,
                 "resume_from_checkpoint": config.RESUME_FROM_CHECKPOINT,
                 "resume_checkpoint_path": str(config.RESUME_CHECKPOINT_PATH) if config.RESUME_FROM_CHECKPOINT else None,
@@ -517,7 +553,8 @@ def train() -> None:
         "grad_accum_steps": config.GRAD_ACCUM_STEPS,
         "effective_batch_size": config.BATCH_SIZE * config.GRAD_ACCUM_STEPS,
         "eval_batch_size": config.EVAL_BATCH_SIZE,
-        "use_amp": bool(config.USE_AMP and device.type == "cuda"),
+        "use_amp": amp_is_enabled(device),
+        "amp_disabled_reason": amp_disabled_reason(device),
         "use_graph_shards": config.USE_GRAPH_SHARDS,
         "validation_split": "val",
         "num_workers": config.NUM_WORKERS,
@@ -526,6 +563,8 @@ def train() -> None:
         "lr_target": config.LEARNING_RATE,
         "lr_min": config.MIN_LEARNING_RATE,
         "scheduler": config.LR_SCHEDULER,
+        "plateau_monitor": config.PLATEAU_MONITOR,
+        "plateau_threshold": config.PLATEAU_THRESHOLD,
         "cosine_t0": config.COSINE_T0,
         "cosine_t_mult": config.COSINE_T_MULT,
         "label_smoothing": config.LABEL_SMOOTHING,
@@ -550,9 +589,11 @@ def train() -> None:
         raise ValueError("XG-NID oversampling training expects SECUREEDGE_LABEL_SMOOTHING=0.0.")
     if config.GRAD_ACCUM_STEPS < 1:
         raise ValueError("SECUREEDGE_GRAD_ACCUM_STEPS must be >= 1.")
+    if config.PLATEAU_MONITOR not in {"val_macro_f1", "train_accuracy"}:
+        raise ValueError("SECUREEDGE_PLATEAU_MONITOR must be one of: val_macro_f1, train_accuracy")
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
-    use_amp = bool(config.USE_AMP and device.type == "cuda")
+    use_amp = amp_is_enabled(device)
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     if config.WARMUP_EPOCHS > 0:
         for group in optimizer.param_groups:
@@ -570,6 +611,7 @@ def train() -> None:
             mode="max",
             factor=0.5,
             patience=config.LR_SCHEDULER_PATIENCE,
+            threshold=config.PLATEAU_THRESHOLD,
             min_lr=config.MIN_LEARNING_RATE,
         )
     elif config.LR_SCHEDULER == "none":
@@ -619,7 +661,15 @@ def train() -> None:
             labels = batch.y.view(-1)
             with torch.amp.autocast("cuda", enabled=use_amp):
                 logits = logits_for_batch(model, batch)
+                if not torch.isfinite(logits).all():
+                    raise FloatingPointError(
+                        f"Non-finite logits detected during epoch {epoch}, batch {batch_index + 1}."
+                    )
                 loss = criterion(logits, labels)
+            if not torch.isfinite(loss):
+                raise FloatingPointError(
+                    f"Non-finite loss detected during epoch {epoch}, batch {batch_index + 1}: {float(loss.detach().cpu())}"
+                )
             losses.append(float(loss.item()))
             scaled_loss = loss / config.GRAD_ACCUM_STEPS
             scaler.scale(scaled_loss).backward()
@@ -664,8 +714,13 @@ def train() -> None:
 
         metrics = evaluate_metrics(model, eval_source, DataLoader, device, use_shards=config.USE_GRAPH_SHARDS)
         macro_f1 = float(metrics["macro_f1"])
+        scheduler_monitor = config.PLATEAU_MONITOR if config.LR_SCHEDULER == "plateau" else config.LR_SCHEDULER
+        scheduler_metric = macro_f1
         if scheduler is not None and config.LR_SCHEDULER == "plateau" and epoch > config.WARMUP_EPOCHS:
-            scheduler.step(macro_f1)
+            if config.PLATEAU_MONITOR == "train_accuracy":
+                train_metrics = evaluate_metrics(model, train_source, DataLoader, device, use_shards=config.USE_GRAPH_SHARDS)
+                scheduler_metric = float(train_metrics["accuracy"])
+            scheduler.step(scheduler_metric)
         learning_rate = current_lr(optimizer)
         train_loss = float(np.mean(losses)) if losses else float("nan")
         previous_best = best_f1
@@ -691,6 +746,8 @@ def train() -> None:
             "use_amp": use_amp,
             "heads": 2,
             "scheduler": config.LR_SCHEDULER,
+            "scheduler_monitor": scheduler_monitor,
+            "scheduler_metric": scheduler_metric,
             "stale_epochs": stale_epochs,
             "best_f1_so_far": best_f1,
             "is_best": is_best,
@@ -752,12 +809,17 @@ def train() -> None:
                     "lr_target": config.LEARNING_RATE,
                     "lr_min": config.MIN_LEARNING_RATE,
                     "scheduler": config.LR_SCHEDULER,
+                    "plateau_monitor": config.PLATEAU_MONITOR,
+                    "plateau_threshold": config.PLATEAU_THRESHOLD,
                     "batch_size": config.BATCH_SIZE,
                     "grad_accum_steps": config.GRAD_ACCUM_STEPS,
                     "effective_batch_size": config.BATCH_SIZE * config.GRAD_ACCUM_STEPS,
                     "use_amp": use_amp,
+                    "amp_disabled_reason": amp_disabled_reason(device),
                     "readout_mode": config.HGNN_READOUT_MODE,
                     "use_payload_encoder": config.USE_PAYLOAD_ENCODER,
+                    "batchnorm_eps": config.HGNN_BATCHNORM_EPS,
+                    "graph_value_mode": manifest.get("graph_value_mode", "scaled"),
                 },
             }
             torch.save(checkpoint, run_checkpoint_path)

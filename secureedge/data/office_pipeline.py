@@ -752,25 +752,10 @@ def build_office_candidate_window_pcap(
     packets_written = 0
     truncated = False
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with Path(pcap_path).open("rb") as source:
-        global_header = source.read(24)
-        if len(global_header) != 24:
-            raise ValueError(f"PCAP is missing a complete global header: {pcap_path}")
-        byte_order, timestamp_resolution = pcap_byte_order_and_resolution(global_header)
-        with output_path.open("wb") as target:
-            target.write(global_header)
-            while True:
-                packet_header = source.read(16)
-                if not packet_header:
-                    break
-                if len(packet_header) != 16:
-                    truncated = True
-                    break
-                ts_sec, ts_frac, incl_len, _orig_len = struct.unpack(f"{byte_order}IIII", packet_header)
-                packet = source.read(incl_len)
-                if len(packet) != incl_len:
-                    truncated = True
-                    break
+    with output_path.open("wb") as target:
+        target.write(struct.pack("<IHHIIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1))
+        try:
+            for timestamp, packet in iter_capture_packets(Path(pcap_path)):
                 packets_scanned += 1
                 parts = packet_flow_tuple(packet)
                 if parts is None:
@@ -778,12 +763,19 @@ def build_office_candidate_window_pcap(
                 windows = tuple_windows.get(parts)
                 if not windows:
                     continue
-                timestamp = float(ts_sec) + float(ts_frac) / timestamp_resolution
                 if not timestamp_in_windows(timestamp, windows):
                     continue
-                target.write(packet_header)
+                ts_sec = int(timestamp)
+                ts_usec = int(round((timestamp - ts_sec) * 1_000_000))
+                if ts_usec >= 1_000_000:
+                    ts_sec += 1
+                    ts_usec -= 1_000_000
+                target.write(struct.pack("<IIII", ts_sec, ts_usec, len(packet), len(packet)))
                 target.write(packet)
                 packets_written += 1
+        except ValueError:
+            truncated = True
+            raise
     return {
         "packets_scanned": packets_scanned,
         "packets_written": packets_written,

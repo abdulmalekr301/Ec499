@@ -1,21 +1,21 @@
 # HGNN Training
 
-Generated: `2026-07-05T06:18:27+00:00`
+Generated: `2026-07-07T11:52:22+00:00`
 
 ## Action
 - Trained `SecureEdgeHGNN` on graph files from `/var/home/alucard-00/EC499/data/graphs/train`.
 - Evaluated each epoch on validation graph files from `/var/home/alucard-00/EC499/data/graphs/val`.
 - Reserved test graph files under `/var/home/alucard-00/EC499/data/graphs/test` for final evaluation.
-- Best validation macro F1: `0.939311`.
-- Batch size: `512` graph objects.
-- Gradient accumulation steps: `1`.
+- Best validation macro F1: `0.952067`.
+- Batch size: `256` graph objects.
+- Gradient accumulation steps: `2`.
 - Effective batch size: `512` graph objects.
-- Evaluation batch size: `512` graph objects.
-- AMP enabled: `True`.
+- Evaluation batch size: `256` graph objects.
+- AMP enabled: `False`.
 - Device: `cuda`.
-- Run log: `/var/home/alucard-00/EC499/context/logs-15.md`.
-- History JSON: `/var/home/alucard-00/EC499/artifacts/training_runs/run_15_history.json`.
-- History CSV: `/var/home/alucard-00/EC499/artifacts/training_runs/run_15_history.csv`.
+- Run log: `/var/home/alucard-00/EC499/context/logs-21.md`.
+- History JSON: `/var/home/alucard-00/EC499/artifacts/training_runs/run_21_history.json`.
+- History CSV: `/var/home/alucard-00/EC499/artifacts/training_runs/run_21_history.csv`.
 - Training limit per class: `full split`.
 - Validation limit per class: `full split`.
 - Warmup: `5` epochs from `0.0003` to `0.003`.
@@ -25,220 +25,222 @@ Generated: `2026-07-05T06:18:27+00:00`
 - Resume from checkpoint: `False`.
 - Resume checkpoint path: `not used`.
 - Loss: plain `CrossEntropyLoss()` with no class weights and no label smoothing.
-- Saved this run's best checkpoint to `/var/home/alucard-00/EC499/artifacts/training_runs/run_15_best_hgnn.pt`.
+- Saved this run's best checkpoint to `/var/home/alucard-00/EC499/artifacts/training_runs/run_21_best_hgnn.pt`.
 - Promoted to global checkpoint `/var/home/alucard-00/EC499/artifacts/best_hgnn.pt` only if this run beat the existing global macro F1.
 
 ## Last Epoch
 ```json
 {
-  "run": 15,
-  "epoch": 189,
-  "train_loss": 0.03078343380475417,
-  "accuracy": 0.9391875,
-  "macro_f1": 0.9389055797369067,
-  "learning_rate": 0.0002798075939155718,
-  "batch_size": 512,
-  "grad_accum_steps": 1,
+  "run": 21,
+  "epoch": 218,
+  "train_loss": 0.08050101182307116,
+  "accuracy": 0.9679979734864477,
+  "macro_f1": 0.9472724711234095,
+  "learning_rate": 0.00023460830860972908,
+  "batch_size": 256,
+  "grad_accum_steps": 2,
   "effective_batch_size": 512,
-  "eval_batch_size": 512,
-  "use_amp": true,
+  "eval_batch_size": 256,
+  "use_amp": false,
   "heads": 2,
   "scheduler": "cosine",
-  "stale_epochs": 50,
-  "best_f1_so_far": 0.939311167648876,
+  "scheduler_monitor": "cosine",
+  "scheduler_metric": 0.9472724711234095,
+  "stale_epochs": 75,
+  "best_f1_so_far": 0.9520667851047279,
   "is_best": false,
-  "epoch_duration_seconds": 153.36275183099497,
-  "seconds": 153.36275183099497,
+  "epoch_duration_seconds": 130.2276121449977,
+  "seconds": 130.2276121449977,
   "cosine_cycle": 3,
-  "correct": 30054,
-  "incorrect": 1946,
-  "total": 32000,
+  "correct": 11464,
+  "incorrect": 379,
+  "total": 11843,
   "per_class": {
     "Benign": {
-      "tp": 3704,
-      "fp": 542,
-      "fn": 296,
-      "tn": 27458,
-      "support": 4000,
-      "predicted_as_class": 4246,
-      "precision": 0.8723504474799811,
-      "recall": 0.926,
-      "f1": 0.8983749696822703,
-      "false_positive_rate": 0.019357142857142857,
-      "false_negative_rate": 0.074
+      "tp": 1917,
+      "fp": 70,
+      "fn": 83,
+      "tn": 9773,
+      "support": 2000,
+      "predicted_as_class": 1987,
+      "precision": 0.964771011575239,
+      "recall": 0.9585,
+      "f1": 0.9616252821670429,
+      "false_positive_rate": 0.007111652951335975,
+      "false_negative_rate": 0.0415
     },
     "DDoS": {
-      "tp": 3982,
-      "fp": 18,
-      "fn": 18,
-      "tn": 27982,
-      "support": 4000,
-      "predicted_as_class": 4000,
-      "precision": 0.9955,
-      "recall": 0.9955,
-      "f1": 0.9955000000000002,
-      "false_positive_rate": 0.0006428571428571428,
-      "false_negative_rate": 0.0045
+      "tp": 1984,
+      "fp": 12,
+      "fn": 16,
+      "tn": 9831,
+      "support": 2000,
+      "predicted_as_class": 1996,
+      "precision": 0.9939879759519038,
+      "recall": 0.992,
+      "f1": 0.9929929929929929,
+      "false_positive_rate": 0.0012191405059433099,
+      "false_negative_rate": 0.008
     },
     "DoS": {
-      "tp": 3988,
-      "fp": 9,
-      "fn": 12,
-      "tn": 27991,
-      "support": 4000,
-      "predicted_as_class": 3997,
-      "precision": 0.9977483112334251,
-      "recall": 0.997,
-      "f1": 0.9973740152557209,
-      "false_positive_rate": 0.0003214285714285714,
-      "false_negative_rate": 0.003
+      "tp": 1979,
+      "fp": 10,
+      "fn": 21,
+      "tn": 9833,
+      "support": 2000,
+      "predicted_as_class": 1989,
+      "precision": 0.9949723479135244,
+      "recall": 0.9895,
+      "f1": 0.9922286287290047,
+      "false_positive_rate": 0.001015950421619425,
+      "false_negative_rate": 0.0105
     },
     "Mirai": {
-      "tp": 3998,
-      "fp": 1,
-      "fn": 2,
-      "tn": 27999,
-      "support": 4000,
-      "predicted_as_class": 3999,
-      "precision": 0.9997499374843711,
+      "tp": 1999,
+      "fp": 0,
+      "fn": 1,
+      "tn": 9843,
+      "support": 2000,
+      "predicted_as_class": 1999,
+      "precision": 1.0,
       "recall": 0.9995,
-      "f1": 0.9996249531191399,
-      "false_positive_rate": 3.571428571428572e-05,
+      "f1": 0.9997499374843711,
+      "false_positive_rate": 0.0,
       "false_negative_rate": 0.0005
     },
     "Recon": {
-      "tp": 3965,
-      "fp": 113,
-      "fn": 35,
-      "tn": 27887,
-      "support": 4000,
-      "predicted_as_class": 4078,
-      "precision": 0.9722903384011771,
-      "recall": 0.99125,
-      "f1": 0.9816786333250805,
-      "false_positive_rate": 0.004035714285714286,
-      "false_negative_rate": 0.00875
+      "tp": 1806,
+      "fp": 38,
+      "fn": 123,
+      "tn": 9876,
+      "support": 1929,
+      "predicted_as_class": 1844,
+      "precision": 0.9793926247288504,
+      "recall": 0.9362363919129082,
+      "f1": 0.9573283858998144,
+      "false_positive_rate": 0.003832963485979423,
+      "false_negative_rate": 0.06376360808709176
     },
     "Spoofing": {
-      "tp": 3822,
-      "fp": 133,
-      "fn": 178,
-      "tn": 27867,
-      "support": 4000,
-      "predicted_as_class": 3955,
-      "precision": 0.9663716814159292,
-      "recall": 0.9555,
-      "f1": 0.9609050911376492,
-      "false_positive_rate": 0.00475,
-      "false_negative_rate": 0.0445
+      "tp": 1267,
+      "fp": 92,
+      "fn": 79,
+      "tn": 10405,
+      "support": 1346,
+      "predicted_as_class": 1359,
+      "precision": 0.9323031640912436,
+      "recall": 0.9413075780089153,
+      "f1": 0.9367837338262477,
+      "false_positive_rate": 0.008764408878727255,
+      "false_negative_rate": 0.058692421991084695
     },
     "WebBased": {
-      "tp": 3539,
-      "fp": 912,
-      "fn": 461,
-      "tn": 27088,
-      "support": 4000,
-      "predicted_as_class": 4451,
-      "precision": 0.7951022242192766,
-      "recall": 0.88475,
-      "f1": 0.837534019642646,
-      "false_positive_rate": 0.03257142857142857,
-      "false_negative_rate": 0.11525
+      "tp": 333,
+      "fp": 149,
+      "fn": 53,
+      "tn": 11308,
+      "support": 386,
+      "predicted_as_class": 482,
+      "precision": 0.6908713692946058,
+      "recall": 0.8626943005181347,
+      "f1": 0.7672811059907834,
+      "false_positive_rate": 0.013005149690145762,
+      "false_negative_rate": 0.13730569948186527
     },
     "BruteForce": {
-      "tp": 3056,
-      "fp": 218,
-      "fn": 944,
-      "tn": 27782,
-      "support": 4000,
-      "predicted_as_class": 3274,
-      "precision": 0.93341478313989,
-      "recall": 0.764,
-      "f1": 0.8402529557327467,
-      "false_positive_rate": 0.007785714285714286,
-      "false_negative_rate": 0.236
+      "tp": 179,
+      "fp": 8,
+      "fn": 3,
+      "tn": 11653,
+      "support": 182,
+      "predicted_as_class": 187,
+      "precision": 0.9572192513368984,
+      "recall": 0.9835164835164835,
+      "f1": 0.970189701897019,
+      "false_positive_rate": 0.0006860475087899837,
+      "false_negative_rate": 0.016483516483516484
     }
   },
   "confusion_matrix": [
     [
-      3704,
-      0,
+      1917,
+      5,
       1,
       0,
       0,
-      21,
-      215,
-      59
+      59,
+      14,
+      4
     ],
     [
       1,
-      3982,
-      2,
+      1984,
+      3,
       0,
-      6,
+      4,
+      4,
+      3,
+      1
+    ],
+    [
       2,
+      1,
+      1979,
+      0,
+      10,
       7,
-      0
-    ],
-    [
-      1,
-      2,
-      3988,
-      1,
-      6,
-      2,
-      0,
-      0
-    ],
-    [
-      0,
-      0,
-      0,
-      3998,
-      0,
-      1,
       1,
       0
     ],
     [
+      0,
+      0,
+      0,
+      1999,
+      0,
+      1,
+      0,
+      0
+    ],
+    [
+      5,
+      5,
+      1,
+      0,
+      1806,
+      8,
+      103,
+      1
+    ],
+    [
+      48,
       1,
       4,
       0,
       0,
-      3965,
-      8,
-      19,
-      3
+      1267,
+      26,
+      0
     ],
     [
-      49,
-      2,
-      3,
+      13,
       0,
-      11,
-      3822,
-      98,
-      15
-    ],
-    [
-      185,
-      5,
       1,
       0,
-      75,
-      54,
-      3539,
-      141
+      24,
+      13,
+      333,
+      2
     ],
     [
-      305,
-      5,
-      2,
+      1,
       0,
-      15,
-      45,
-      572,
-      3056
+      0,
+      0,
+      0,
+      0,
+      2,
+      179
     ]
   ]
 }

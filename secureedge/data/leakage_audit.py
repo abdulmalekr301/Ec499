@@ -198,11 +198,20 @@ def audit(args: argparse.Namespace) -> dict[str, object]:
     feature_names = set(str(name) for name in graph_manifest.get("flow_feature_names", []))
     leaked_features = sorted(feature_names & IDENTITY_COLUMNS)
     scaler_fit_source = dict(graph_manifest.get("scaler_fit_source", {}))
-    expected_scalers = {
-        "flow_scaler_fit_split": "train",
-        "contain_edge_scaler_fit_split": "train",
-        "link_delta_normalizer_fit_split": "train",
-    }
+    graph_value_mode = str(graph_manifest.get("graph_value_mode", "scaled"))
+    expected_scalers = (
+        {
+            "flow_scaler_fit_split": "train",
+            "contain_edge_scaler_fit_split": "train",
+            "link_delta_normalizer_fit_split": "train",
+        }
+        if graph_value_mode == "scaled"
+        else {
+            "flow_scaler_fit_split": "disabled_raw_mode",
+            "contain_edge_scaler_fit_split": "disabled_raw_mode",
+            "link_delta_normalizer_fit_split": "disabled_raw_mode",
+        }
+    )
 
     duplicate_compact = {
         "train_val": overlap_count(compact_hashes["train"], compact_hashes["val"]),
@@ -233,6 +242,7 @@ def audit(args: argparse.Namespace) -> dict[str, object]:
         "duplicate_graph_hashes": duplicate_graphs,
         "near_duplicate_graph_fingerprints": near_duplicate_graphs,
         "leaked_identity_features": leaked_features,
+        "graph_value_mode": graph_value_mode,
         "scalers_fit_on_train_only": scaler_fit_source == expected_scalers,
     }
     results = {

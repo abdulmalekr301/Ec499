@@ -51,6 +51,38 @@ def require_pyg() -> tuple[type, type]:
     return HeteroData, object
 
 
+def graph_value_mode() -> str:
+    mode = config.GRAPH_VALUE_MODE
+    if mode not in {"scaled", "raw"}:
+        raise ValueError("SECUREEDGE_GRAPH_VALUE_MODE must be one of: scaled, raw")
+    return mode
+
+
+def raw_derived_flow_transform() -> str:
+    transform = config.RAW_DERIVED_FLOW_TRANSFORM
+    if transform not in {"log1p", "off"}:
+        raise ValueError("SECUREEDGE_RAW_DERIVED_FLOW_TRANSFORM must be one of: log1p, off")
+    return transform
+
+
+def transform_raw_flow_values(flow_values: np.ndarray, feature_names: list[str]) -> np.ndarray:
+    values = np.asarray(flow_values, dtype=np.float32).copy()
+    if graph_value_mode() != "raw" or raw_derived_flow_transform() == "off":
+        return values
+    derived_indices = [
+        index
+        for index, name in enumerate(feature_names)
+        if name in set(config.DERIVED_FLOW_FEATURES)
+    ]
+    if not derived_indices:
+        return values
+    selected = values[derived_indices].astype(np.float64)
+    selected = np.nan_to_num(selected, nan=0.0, posinf=np.finfo(np.float32).max, neginf=0.0)
+    selected = np.log1p(np.clip(selected, a_min=0.0, a_max=None))
+    values[derived_indices] = selected.astype(np.float32)
+    return values
+
+
 def ordered_flow_vector(flow_features: dict[str, float], temporal_features: dict[str, float]) -> tuple[list[str], list[float]]:
     derived_features = compute_derived_features(flow_features)
     complete_features = {**flow_features, **derived_features}
@@ -129,8 +161,15 @@ def compact_to_hetero_graph(compact: dict[str, object]):
         return None
 
     data = HeteroData()
-    data["flow"].x = torch.tensor(np.asarray(compact["flow_x"], dtype=np.float32), dtype=torch.float32).unsqueeze(0)
-    data["packet"].x = torch.tensor(packet_rows.astype(np.float32) / 255.0, dtype=torch.float32)
+    flow_values = transform_raw_flow_values(
+        np.asarray(compact["flow_x"], dtype=np.float32),
+        list(compact.get("flow_feature_names", list(config.FLOW_FEATURE_ORDER) + list(config.TEMPORAL_FEATURES))),
+    )
+    data["flow"].x = torch.tensor(flow_values, dtype=torch.float32).unsqueeze(0)
+    packet_x = packet_rows.astype(np.float32)
+    if graph_value_mode() == "scaled":
+        packet_x = packet_x / 255.0
+    data["packet"].x = torch.tensor(packet_x, dtype=torch.float32)
     contains_index = torch.tensor([[0] * n_packets, list(range(n_packets))], dtype=torch.long)
     contains_attr = torch.tensor(np.asarray(compact["contain_edge_attr"], dtype=np.float32), dtype=torch.float32)
     data["flow", "contains", "packet"].edge_index = contains_index
@@ -152,6 +191,17 @@ def compact_to_hetero_graph(compact: dict[str, object]):
     data.source_order = int(compact["source_order"])
     data.flow_feature_names = list(compact["flow_feature_names"])
     data.flow_feature_order = list(compact.get("flow_feature_order", config.FLOW_FEATURE_ORDER))
+    for key in (
+        "flow_hash",
+        "day",
+        "source",
+        "source_dataset",
+        "split_scope",
+        "candidate_split",
+        "endpoint_selection",
+    ):
+        if key in compact:
+            setattr(data, key, compact[key])
     return data
 
 
@@ -247,10 +297,13 @@ def graph_link_delta_vector(graphs: Iterable[GraphRef]) -> np.ndarray:
 
 def normalize_graph(
     graph,
-    flow_scaler: StandardScaler,
-    contain_scaler: StandardScaler,
+    flow_scaler: StandardScaler | None,
+    contain_scaler: StandardScaler | None,
     link_norm_value: float,
 ) -> object:
+    if graph_value_mode() == "raw":
+        return compact_to_hetero_graph(graph) if is_compact_graph(graph) else graph
+
     link_norm_value = max(float(link_norm_value), 1.0)
     if is_compact_graph(graph):
         compact = dict(graph)
@@ -277,7 +330,14 @@ def normalize_graph(
     return graph
 
 
-def fit_graph_normalizers(train_graphs: list[GraphRef]) -> tuple[StandardScaler, StandardScaler, float]:
+def fit_graph_normalizers(train_graphs: list[GraphRef]) -> tuple[StandardScaler | None, StandardScaler | None, float]:
+    if graph_value_mode() == "raw":
+        config.LINK_EDGE_NORM_PATH.write_text(
+            json.dumps({"method": "raw_unscaled", "p99_ms": None}, indent=2),
+            encoding="utf-8",
+        )
+        return None, None, 1.0
+
     flow_scaler = StandardScaler()
     flow_scaler.fit(graph_flow_matrix(train_graphs))
 
@@ -308,8 +368,8 @@ def save_graph_split(
     graphs: list[GraphRef],
     split_dir: Path,
     split_name: str,
-    flow_scaler: StandardScaler,
-    contain_scaler: StandardScaler,
+    flow_scaler: StandardScaler | None,
+    contain_scaler: StandardScaler | None,
     link_norm_value: float,
 ) -> dict[str, list[str]]:
     clear_pt_files(split_dir)
@@ -338,6 +398,7 @@ def save_graph_split(
 def save_graph_dataset(train_graphs: list[GraphRef], val_graphs: list[GraphRef], test_graphs: list[GraphRef]) -> dict[str, object]:
     if not train_graphs or not val_graphs or not test_graphs:
         raise ValueError("Train, validation, and test graph splits must all contain at least one graph.")
+    mode = graph_value_mode()
     flow_scaler, contain_scaler, link_norm_value = fit_graph_normalizers(train_graphs)
     config.FLOW_FEATURE_ORDER_PATH.write_text(json.dumps(list(config.FLOW_FEATURE_ORDER), indent=2), encoding="utf-8")
     train_paths = save_graph_split(train_graphs, config.GRAPH_TRAIN_DIR, "train", flow_scaler, contain_scaler, link_norm_value)
@@ -391,17 +452,27 @@ def save_graph_dataset(train_graphs: list[GraphRef], val_graphs: list[GraphRef],
             "link_edge": config.N_LINK_EDGE_FEATS,
         },
         "flow_feature_names": feature_names,
+        "graph_value_mode": mode,
+        "raw_derived_flow_transform": config.RAW_DERIVED_FLOW_TRANSFORM if mode == "raw" else "not_applicable_scaled_mode",
         "link_edge_norm_value": link_norm_value,
         "scalers": {
             "flow_node": str(config.FLOW_NODE_SCALER_PATH),
             "contain_edge": str(config.CONTAIN_EDGE_SCALER_PATH),
             "link_edge": str(config.LINK_EDGE_NORM_PATH),
         },
-        "scaler_fit_source": {
-            "flow_scaler_fit_split": "train",
-            "contain_edge_scaler_fit_split": "train",
-            "link_delta_normalizer_fit_split": "train",
-        },
+        "scaler_fit_source": (
+            {
+                "flow_scaler_fit_split": "train",
+                "contain_edge_scaler_fit_split": "train",
+                "link_delta_normalizer_fit_split": "train",
+            }
+            if mode == "scaled"
+            else {
+                "flow_scaler_fit_split": "disabled_raw_mode",
+                "contain_edge_scaler_fit_split": "disabled_raw_mode",
+                "link_delta_normalizer_fit_split": "disabled_raw_mode",
+            }
+        ),
         "flow_feature_order_path": str(config.FLOW_FEATURE_ORDER_PATH),
     }
     config.GRAPH_MANIFEST_PATH.write_text(json.dumps(manifest, indent=2), encoding="utf-8")

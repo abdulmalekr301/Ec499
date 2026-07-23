@@ -38,10 +38,10 @@ class SecureEdgeHGNN(nn.Module):
                     kernel_size=config.PAYLOAD_ENCODER_KERNEL_SIZE,
                     padding=config.PAYLOAD_ENCODER_KERNEL_SIZE // 2,
                 ),
-                nn.BatchNorm1d(config.PAYLOAD_ENCODER_CHANNELS),
+                nn.BatchNorm1d(config.PAYLOAD_ENCODER_CHANNELS, eps=config.HGNN_BATCHNORM_EPS),
                 nn.ReLU(),
                 nn.Conv1d(config.PAYLOAD_ENCODER_CHANNELS, config.PAYLOAD_ENCODER_CHANNELS, kernel_size=5, padding=2),
-                nn.BatchNorm1d(config.PAYLOAD_ENCODER_CHANNELS),
+                nn.BatchNorm1d(config.PAYLOAD_ENCODER_CHANNELS, eps=config.HGNN_BATCHNORM_EPS),
                 nn.ReLU(),
                 nn.AdaptiveMaxPool1d(1),
                 nn.Flatten(),
@@ -81,8 +81,8 @@ class SecureEdgeHGNN(nn.Module):
             },
             aggr="sum",
         )
-        self.bn_flow_1 = nn.BatchNorm1d(hidden_size)
-        self.bn_packet_1 = nn.BatchNorm1d(hidden_size)
+        self.bn_flow_1 = nn.BatchNorm1d(hidden_size, eps=config.HGNN_BATCHNORM_EPS)
+        self.bn_packet_1 = nn.BatchNorm1d(hidden_size, eps=config.HGNN_BATCHNORM_EPS)
         self.conv2 = HeteroConv(
             {
                 ("flow", "contains", "packet"): GATConv(
@@ -112,8 +112,8 @@ class SecureEdgeHGNN(nn.Module):
             },
             aggr="sum",
         )
-        self.bn_flow_2 = nn.BatchNorm1d(hidden_size)
-        self.bn_packet_2 = nn.BatchNorm1d(hidden_size)
+        self.bn_flow_2 = nn.BatchNorm1d(hidden_size, eps=config.HGNN_BATCHNORM_EPS)
+        self.bn_packet_2 = nn.BatchNorm1d(hidden_size, eps=config.HGNN_BATCHNORM_EPS)
         self.activation = nn.LeakyReLU(negative_slope=leaky_relu_slope)
         if config.HGNN_READOUT_MODE not in {"concat", "average"}:
             raise ValueError("SECUREEDGE_HGNN_READOUT_MODE must be one of: concat, average")
@@ -168,7 +168,9 @@ def document_architecture() -> None:
             f"- Packet node input dimension: `{config.N_PACKET_FEATURES}`.",
             f"- Optional packet payload CNN encoder enabled: `{config.USE_PAYLOAD_ENCODER}`.",
             f"- Hidden size: `{config.HGNN_HIDDEN_SIZE}`.",
+            f"- BatchNorm epsilon: `{config.HGNN_BATCHNORM_EPS}`.",
             f"- GAT attention: `heads=2`, `attention size={config.HGNN_ATTN_SIZE}`, concatenated output `{config.HGNN_ATTN_SIZE * 2}`.",
+            "- Note: multi-head GAT remains a SecureEdge enhancement; the XG-NID repo comparison showed `attn_size` is dead code in the upstream model.",
             "- Both HGNN layers receive edge attributes for contain, reverse-contain, and packet-link relations.",
             f"- Graph readout mode: `{config.HGNN_READOUT_MODE}`.",
             "- With concat readout, the classifier head receives a 128-dimensional flow+packet embedding.",

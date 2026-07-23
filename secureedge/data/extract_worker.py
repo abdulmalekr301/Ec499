@@ -86,7 +86,7 @@ def mac_filter_decision(flow_record: dict[str, object], class_name: str) -> tupl
             return False, "benign_attacker_dropped"
         return True, "benign_kept"
     if class_name not in config.MAC_FILTERED_CLASSES:
-        return True, "class_conditional_unfiltered"
+        return True, "attack_mac_filter_not_configured_for_class"
     if attacker_involved:
         return True, "attack_attacker_kept"
     return False, "attack_background_dropped"

@@ -1,6 +1,6 @@
 # Graph Construction From Compact Records
 
-Generated: `2026-07-04T21:49:00+00:00`
+Generated: `2026-07-07T00:35:21+00:00`
 
 ## Action
 - Loaded compact records from `/var/home/alucard-00/EC499/artifacts/compact_reservoir_manifest.json`.
@@ -16,8 +16,8 @@ Generated: `2026-07-04T21:49:00+00:00`
 ```json
 {
   "n_train": 160000,
-  "n_val": 32000,
-  "n_test": 32000,
+  "n_val": 11843,
+  "n_test": 11841,
   "class_counts_train": {
     "Benign": 20000,
     "DDoS": 20000,
@@ -29,24 +29,24 @@ Generated: `2026-07-04T21:49:00+00:00`
     "BruteForce": 20000
   },
   "class_counts_val": {
-    "Benign": 4000,
-    "DDoS": 4000,
-    "DoS": 4000,
-    "Mirai": 4000,
-    "Recon": 4000,
-    "Spoofing": 4000,
-    "WebBased": 4000,
-    "BruteForce": 4000
+    "Benign": 2000,
+    "DDoS": 2000,
+    "DoS": 2000,
+    "Mirai": 2000,
+    "Recon": 1929,
+    "Spoofing": 1346,
+    "WebBased": 386,
+    "BruteForce": 182
   },
   "class_counts_test": {
-    "Benign": 4000,
-    "DDoS": 4000,
-    "DoS": 4000,
-    "Mirai": 4000,
-    "Recon": 4000,
-    "Spoofing": 4000,
-    "WebBased": 4000,
-    "BruteForce": 4000
+    "Benign": 2000,
+    "DDoS": 2000,
+    "DoS": 2000,
+    "Mirai": 2000,
+    "Recon": 1928,
+    "Spoofing": 1346,
+    "WebBased": 385,
+    "BruteForce": 182
   },
   "feature_dimensions": {
     "flow_node": 92,

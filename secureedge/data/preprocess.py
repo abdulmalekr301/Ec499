@@ -245,6 +245,12 @@ def compact_content_hash(path: Path) -> str:
     return h.hexdigest()
 
 
+def compact_subtype_label(path: Path) -> str:
+    with path.open("rb") as handle:
+        record = pickle.load(handle)
+    return str(record["subtype_label"])
+
+
 def balance_to_target(records: list[Path], target: int, rng: np.random.Generator) -> tuple[list[Path], dict[str, object]]:
     if not records:
         raise ValueError("Cannot balance an empty graph pool.")
@@ -266,9 +272,136 @@ def balance_to_target(records: list[Path], target: int, rng: np.random.Generator
     return balanced, metadata
 
 
+def capped_floor_subtype_allocations(
+    records_by_subtype: dict[str, list[Path]],
+    target: int,
+) -> dict[str, int]:
+    present_subtypes = sorted(subtype for subtype, records in records_by_subtype.items() if records)
+    if not present_subtypes:
+        raise ValueError("Cannot subtype-balance an empty WebBased train pool.")
+    floor_slots = int(round(target * config.WEBBASED_SUBTYPE_FLOOR_FRACTION))
+    ceiling_slots = int(round(target * config.WEBBASED_SUBTYPE_CEILING_FRACTION))
+    ceiling_slots = max(ceiling_slots, floor_slots)
+    allocations = {subtype: min(floor_slots, target) for subtype in present_subtypes}
+    if sum(allocations.values()) > target:
+        allocations = {subtype: target // len(present_subtypes) for subtype in present_subtypes}
+        for subtype in present_subtypes[: target - sum(allocations.values())]:
+            allocations[subtype] += 1
+        return allocations
+
+    remaining = target - sum(allocations.values())
+    eligible = set(present_subtypes)
+    while remaining > 0 and eligible:
+        total_weight = sum(len(records_by_subtype[subtype]) for subtype in eligible)
+        if total_weight <= 0:
+            break
+        quotas = {
+            subtype: remaining * (len(records_by_subtype[subtype]) / total_weight)
+            for subtype in eligible
+        }
+        increments = {subtype: min(int(quotas[subtype]), ceiling_slots - allocations[subtype]) for subtype in eligible}
+        assigned = sum(increments.values())
+        remainders = sorted(
+            eligible,
+            key=lambda subtype: (quotas[subtype] - int(quotas[subtype]), len(records_by_subtype[subtype]), subtype),
+            reverse=True,
+        )
+        for subtype in remainders:
+            if assigned >= remaining:
+                break
+            if allocations[subtype] + increments[subtype] < ceiling_slots:
+                increments[subtype] += 1
+                assigned += 1
+        for subtype, increment in increments.items():
+            allocations[subtype] += increment
+        remaining -= assigned
+        eligible = {subtype for subtype in eligible if allocations[subtype] < ceiling_slots}
+        if assigned == 0:
+            break
+
+    if remaining > 0:
+        # Fallback for degenerate cases where the ceiling prevents reaching target.
+        cycle = sorted(present_subtypes, key=lambda subtype: (len(records_by_subtype[subtype]), subtype), reverse=True)
+        index = 0
+        while remaining > 0:
+            allocations[cycle[index % len(cycle)]] += 1
+            remaining -= 1
+            index += 1
+    return allocations
+
+
+def balance_webbased_subtypes(
+    train_seed: list[Path],
+    target: int,
+    rng: np.random.Generator,
+) -> tuple[list[Path], dict[str, object]]:
+    if config.WEBBASED_SUBTYPE_BALANCING == "off":
+        balanced, metadata = balance_to_target(train_seed, target, rng)
+        metadata["webbased_subtype_balancing"] = "off"
+        return balanced, metadata
+    if config.WEBBASED_SUBTYPE_BALANCING != "capped_floor":
+        raise ValueError("SECUREEDGE_WEBBASED_SUBTYPE_BALANCING must be one of: capped_floor, off")
+
+    records_by_subtype: dict[str, list[Path]] = {subtype: [] for subtype in subtypes_for_class("WebBased")}
+    for path in train_seed:
+        records_by_subtype.setdefault(compact_subtype_label(path), []).append(path)
+    allocations = capped_floor_subtype_allocations(records_by_subtype, target)
+    balanced: list[Path] = []
+    subtype_summary: dict[str, dict[str, object]] = {}
+    for subtype, slot_count in sorted(allocations.items()):
+        records = records_by_subtype[subtype]
+        if len(records) >= slot_count:
+            selected = sample_graphs(records, slot_count, rng, replace=False)
+            oversampled_count = 0
+        else:
+            oversampled_count = slot_count - len(records)
+            selected = list(records) + sample_graphs(records, oversampled_count, rng, replace=True)
+        balanced.extend(selected)
+        subtype_summary[subtype] = {
+            "real_available_in_train_seed": len(records),
+            "target_slots": slot_count,
+            "unique_in_balanced_subtype": len(set(selected)),
+            "oversampled_count": oversampled_count,
+            "oversampled_fraction": oversampled_count / max(slot_count, 1),
+        }
+    rng.shuffle(balanced)
+    metadata = {
+        "real_available": len(train_seed),
+        "target_total": target,
+        "unique_in_balanced_pool": len(set(balanced)),
+        "oversampled_count": max(0, target - len(train_seed)),
+        "oversampled_fraction": max(0, target - len(train_seed)) / max(target, 1),
+        "webbased_subtype_balancing": config.WEBBASED_SUBTYPE_BALANCING,
+        "webbased_subtype_floor_fraction": config.WEBBASED_SUBTYPE_FLOOR_FRACTION,
+        "webbased_subtype_ceiling_fraction": config.WEBBASED_SUBTYPE_CEILING_FRACTION,
+        "webbased_subtype_allocations": allocations,
+        "webbased_subtype_summary": subtype_summary,
+    }
+    return balanced, metadata
+
+
+def split_targets_for_class(pool_size: int) -> tuple[int, int, int, str]:
+    threshold = config.PROPORTIONAL_SPLIT_THRESHOLD
+    if pool_size >= threshold:
+        train_target = max(0, pool_size - config.VAL_SAMPLES_PER_CLASS - config.TEST_SAMPLES_PER_CLASS)
+        return train_target, config.VAL_SAMPLES_PER_CLASS, config.TEST_SAMPLES_PER_CLASS, "fixed_targets"
+
+    train_target = int(round(pool_size * config.TRAIN_SAMPLES_PER_CLASS / threshold))
+    val_target = int(round(pool_size * config.VAL_SAMPLES_PER_CLASS / threshold))
+    test_target = max(0, pool_size - train_target - val_target)
+    if train_target < 1 and pool_size > 0:
+        train_target = 1
+        if test_target > 0:
+            test_target -= 1
+        elif val_target > 0:
+            val_target -= 1
+    return train_target, val_target, test_target, "proportional_targets"
+
+
 def split_without_cross_split_duplicates(
     records: list[Path],
     rng: np.random.Generator,
+    class_name: str,
 ) -> tuple[list[Path], list[Path], list[Path], dict[str, object]]:
     unique_records = list(dict.fromkeys(records))
     hash_groups: dict[str, list[Path]] = {}
@@ -277,8 +410,7 @@ def split_without_cross_split_duplicates(
     groups = list(hash_groups.values())
     rng.shuffle(groups)
 
-    requested_test = config.TEST_SAMPLES_PER_CLASS
-    requested_val = config.VAL_SAMPLES_PER_CLASS
+    requested_train, requested_val, requested_test, split_target_mode = split_targets_for_class(len(unique_records))
     train_groups: list[list[Path]] = []
     val_groups: list[list[Path]] = []
     test_groups: list[list[Path]] = []
@@ -308,7 +440,10 @@ def split_without_cross_split_duplicates(
     if not train_seed:
         raise ValueError("Cannot build a train split after reserving validation/test records.")
 
-    class_train, train_summary = balance_to_target(train_seed, config.TRAIN_SAMPLES_PER_CLASS, rng)
+    if class_name == "WebBased":
+        class_train, train_summary = balance_webbased_subtypes(train_seed, config.TRAIN_SAMPLES_PER_CLASS, rng)
+    else:
+        class_train, train_summary = balance_to_target(train_seed, config.TRAIN_SAMPLES_PER_CLASS, rng)
     split_overlap = {
         "train_val": len(set(class_train) & set(class_val)),
         "train_test": len(set(class_train) & set(class_test)),
@@ -319,7 +454,10 @@ def split_without_cross_split_duplicates(
         "split_order": "split_first_then_oversample_train_only",
         "raw_unique_available": len(unique_records),
         "content_hash_group_count": len(groups),
+        "split_target_mode": split_target_mode,
+        "proportional_split_threshold": config.PROPORTIONAL_SPLIT_THRESHOLD,
         "train_seed_count": len(train_seed),
+        "requested_train_real_count": requested_train,
         "requested_train_count": config.TRAIN_SAMPLES_PER_CLASS,
         "requested_val_count": requested_val,
         "requested_test_count": requested_test,
@@ -349,7 +487,7 @@ def build_balanced_splits(
         if not class_graphs:
             raise ValueError(f"Class {class_name} has no graph samples after subtype reservoir extraction.")
         class_pool_counts[class_name] = len(class_graphs)
-        class_train, class_val, class_test, class_summary = split_without_cross_split_duplicates(class_graphs, rng)
+        class_train, class_val, class_test, class_summary = split_without_cross_split_duplicates(class_graphs, rng, class_name)
         oversampling_summary[class_name] = class_summary
         train_graphs.extend(class_train)
         val_graphs.extend(class_val)
@@ -638,12 +776,12 @@ def regenerate_selected_subtype_reservoirs(selected_subtypes: list[str]) -> tupl
     reservoir_dir, manifest_path = resplit_existing_reservoir()
     write_context(
         "48_class_conditional_filtering_regeneration.md",
-        "Class-Conditional Filtering Regeneration",
+        "Uniform MAC Filtering Regeneration",
         [
             "## Action",
-            "- Applied class-conditional MAC filtering.",
+            "- Reverted class-conditional MAC filtering.",
+            "- Applied attacker-MAC filtering uniformly to every non-benign attack class.",
             f"- MAC-filtered classes: `{sorted(config.MAC_FILTERED_CLASSES)}`.",
-            "- WebBased and BruteForce bypass attacker-MAC filtering and use filename/subtype labels.",
             "- Benign remains strict and drops flows involving known attacker MACs.",
             f"- Regenerated selected subtype reservoirs: `{normalized}`.",
             f"- Rebuilt compact split manifest at `{manifest_path}` using split-first/train-only oversampling.",

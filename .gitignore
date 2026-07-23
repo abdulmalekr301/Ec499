@@ -21,6 +21,7 @@ Thumbs.db
 .vscode/
 
 # Raw datasets and downloaded archives
+datasets/
 CSV.zip
 CSV/
 PCAPs/
