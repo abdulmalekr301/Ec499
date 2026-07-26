@@ -1,6 +1,6 @@
 # Office Compact Graph Materialization
 
-Generated: `2026-07-26T03:23:11+00:00`
+Generated: `2026-07-26T05:11:27+00:00`
 
 ## Action
 - Materialized office-model compact graph records from final split candidates.
@@ -14,28 +14,18 @@ Generated: `2026-07-26T03:23:11+00:00`
 ## Counts
 ```json
 {
-  "requested_unique_candidates": 23829,
-  "materialized_or_existing": 14467,
-  "missing_count": 9362,
-  "stop_reason": "completed_with_deferred_pcaps",
+  "requested_unique_candidates": 182,
+  "materialized_or_existing": 20,
+  "missing_count": 152,
+  "stop_reason": "completed",
   "newly_materialized_class_counts": {
-    "DoS": 13909
+    "Infiltration": 20
   },
   "newly_materialized_source_counts": {
-    "CSE-CIC-IDS2018": 13909
+    "CSE-CIC-IDS2018": 20
   },
-  "processed_pcaps": 2,
-  "deferred_pcaps": [
-    {
-      "pcap": "/var/home/alucard-00/EC499/datasets/cic_ids_2018/raw_pcaps/Friday-16-02-2018/pcap/UCAP172.31.69.25-part2.pcap",
-      "status": "preslice_empty",
-      "error": "",
-      "candidate_count": 9362,
-      "matched": 0,
-      "flows_scanned": 0,
-      "remaining": 9362
-    }
-  ],
+  "processed_pcaps": 7,
+  "deferred_pcaps": [],
   "pcap_health": {
     "enabled": false,
     "manifest_path": "/var/home/alucard-00/EC499/artifacts/office_model/office_compact_graph_manifest.json",
@@ -44,7 +34,8 @@ Generated: `2026-07-26T03:23:11+00:00`
     "skip_reasons": {}
   },
   "safety_summary": {
-    "LOCAL_TEMPORAL_CONTEXT_FALLBACK": 13909
+    "LOCAL_TEMPORAL_CONTEXT_FALLBACK": 30,
+    "matched_zero_packet_graph": 10
   }
 }
 ```
