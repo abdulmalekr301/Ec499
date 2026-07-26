@@ -34,6 +34,32 @@ TOP_LEVEL_KEYS = {
 
 
 @dataclass(frozen=True)
+class AttackWindow:
+    day: str
+    subtype: str
+    class_name: str
+    attacker_ips: tuple[str, ...]
+    victim_ips: tuple[str, ...]
+    start: str
+    finish: str
+
+
+@dataclass(frozen=True)
+class SplitTargets:
+    standard_train: int
+    standard_val: int
+    standard_test: int
+    standard_candidate_pool: int
+    webbased_native_train: int
+    webbased_cicids2017_train_only: int
+    webbased_train_real: int
+    webbased_train_target: int
+    webbased_val: int
+    webbased_test: int
+    split_strategy: str
+
+
+@dataclass(frozen=True)
 class OfficeConfig:
     path: Path
     data: dict[str, Any]
@@ -52,6 +78,80 @@ class OfficeConfig:
         return int(self.data["labels"]["timestamp_offset_hours"])
 
     @property
+    def matching_tolerance_seconds(self) -> float:
+        return float(self.data["matching"]["timestamp_tolerance_seconds"])
+
+    @property
+    def allow_reverse_direction(self) -> bool:
+        return bool(self.data["matching"]["allow_reverse_direction"])
+
+    @property
+    def preslice_classes(self) -> set[str]:
+        return {str(item) for item in self.data["slicing"]["preslice_classes"]}
+
+    @property
+    def preslice_time_window_seconds(self) -> float:
+        return float(self.data["slicing"]["preslice_time_window_seconds"])
+
+    @property
+    def max_slice_mb(self) -> int:
+        return int(self.data["slicing"]["max_slice_mb"])
+
+    @property
+    def materialization_batch_size(self) -> int:
+        return int(self.data["materialization"]["batch_max_candidates"])
+
+    @property
+    def materialization_retry_count(self) -> int:
+        return int(self.data["materialization"]["max_retries"])
+
+    @property
+    def worker_rss_cap_mb(self) -> int:
+        return int(self.data["materialization"]["worker_rss_cap_mb"])
+
+    @property
+    def graph_feature_version(self) -> str:
+        return str(self.data["graph"]["compact_feature_version"])
+
+    @property
+    def flow_feature_count(self) -> int:
+        return int(self.data["graph"]["flow_features"])
+
+    @property
+    def packet_feature_count(self) -> int:
+        return int(self.data["graph"]["packet_bytes"])
+
+    @property
+    def flow_packet_limit(self) -> int:
+        return int(self.data["graph"]["flow_packet_limit"])
+
+    @property
+    def attack_windows(self) -> list[AttackWindow]:
+        return [_attack_window_from_mapping(item) for item in self.data["attack_windows"]]
+
+    @property
+    def cicids2017_web_attack_windows(self) -> list[AttackWindow]:
+        return [_attack_window_from_mapping(item) for item in self.data["cicids2017_web_attack_windows"]]
+
+    @property
+    def split_targets(self) -> SplitTargets:
+        standard = self.data["splits"]["standard"]
+        webbased = self.data["splits"]["webbased"]
+        return SplitTargets(
+            standard_train=int(standard["train"]),
+            standard_val=int(standard["val"]),
+            standard_test=int(standard["test"]),
+            standard_candidate_pool=int(standard["candidate_pool"]),
+            webbased_native_train=int(webbased["native_train"]),
+            webbased_cicids2017_train_only=int(webbased["cicids2017_train_only"]),
+            webbased_train_real=int(webbased["train_real"]),
+            webbased_train_target=int(webbased["train_target"]),
+            webbased_val=int(webbased["val"]),
+            webbased_test=int(webbased["test"]),
+            split_strategy=str(self.data["splits"]["split_strategy"]),
+        )
+
+    @property
     def architecture_policy(self) -> dict[str, Any]:
         return dict(self.data["architecture_policy"])
 
@@ -62,12 +162,40 @@ class OfficeConfig:
             return path
         return root_config.ROOT_DIR / path
 
+    @property
+    def dataset_root(self) -> Path:
+        return self.resolve_path("dataset_root")
+
+    @property
+    def raw_pcaps_dir(self) -> Path:
+        return self.resolve_path("raw_pcaps")
+
+    @property
+    def artifacts_dir(self) -> Path:
+        return self.resolve_path("artifacts")
+
+    @property
+    def compact_root(self) -> Path:
+        return self.resolve_path("compact_out")
+
     def provenance(self) -> dict[str, Any]:
         return {
             "config_path": str(self.path),
             "config_hash": self.config_hash,
             "config_schema_version": self.schema_version,
         }
+
+
+def _attack_window_from_mapping(value: dict[str, Any]) -> AttackWindow:
+    return AttackWindow(
+        day=str(value["day"]),
+        subtype=str(value["subtype"]),
+        class_name=str(value["class_name"]),
+        attacker_ips=tuple(str(item) for item in value.get("attacker_ips", [])),
+        victim_ips=tuple(str(item) for item in value.get("victim_ips", [])),
+        start=str(value["start"]),
+        finish=str(value["finish"]),
+    )
 
 
 def _canonicalize(value: Any) -> Any:

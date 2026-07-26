@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 import numpy as np
 
@@ -124,7 +124,8 @@ class PacketCapture:
 
 class FlowCapper:
     def on_update(self, packet: object, flow: object) -> None:
-        if getattr(flow, "bidirectional_packets", 0) >= config.FLOW_PACKET_LIMIT:
+        limit = int(getattr(config, "FLOW_SEGMENT_PACKET_LIMIT", 0) or 0)
+        if limit > 0 and getattr(flow, "bidirectional_packets", 0) >= limit:
             flow.expiration_id = -1
 
 
@@ -258,7 +259,16 @@ def iter_flow_records(
     subtype_label: str,
     extractor: TemporalFeatureExtractor | None = None,
     flow_key_filter: set[tuple[str, str, str, str, str]] | None = None,
+    *,
+    temporal_mode: Literal["calculate", "disabled"] = "calculate",
+    require_external_extractor: bool = False,
+    enable_flow_segmentation: bool | None = None,
 ) -> Iterable[dict[str, object]]:
+    if temporal_mode not in {"calculate", "disabled"}:
+        raise ValueError("temporal_mode must be one of: 'calculate', 'disabled'")
+    if temporal_mode == "calculate" and extractor is None and require_external_extractor:
+        raise ValueError("Office materialization requires an explicitly managed temporal extractor.")
+
     try:
         from nfstream import NFPlugin, NFStreamer
     except ModuleNotFoundError as exc:
@@ -276,8 +286,13 @@ def iter_flow_records(
     class NFStreamActiveIdlePlugin(ActiveIdlePlugin, NFPlugin):
         pass
 
-    if extractor is None:
+    if temporal_mode == "calculate" and extractor is None:
         extractor = TemporalFeatureExtractor(window_size=config.TEMPORAL_WINDOW_SIZE)
+    if enable_flow_segmentation is None:
+        enable_flow_segmentation = int(getattr(config, "FLOW_SEGMENT_PACKET_LIMIT", 0) or 0) > 0
+    udps = [NFStreamActiveIdlePlugin(), NFStreamPacketCapture(flow_key_filter)]
+    if enable_flow_segmentation:
+        udps.append(NFStreamFlowCapper())
     streamer = NFStreamer(
         source=str(path),
         decode_tunnels=False,
@@ -287,7 +302,7 @@ def iter_flow_records(
         idle_timeout=int(config.FLOW_IDLE_TIMEOUT_SECONDS),
         active_timeout=1800,
         accounting_mode=0,
-        udps=[NFStreamActiveIdlePlugin(), NFStreamPacketCapture(flow_key_filter), NFStreamFlowCapper()],
+        udps=udps,
     )
 
     for source_order, flow in enumerate(streamer):
@@ -295,7 +310,11 @@ def iter_flow_records(
         flow_data.update(active_idle_feature_dict(flow))
         src_mac, dst_mac = flow_mac_pair(flow_data)
         feature_values = nfstream_feature_dict(flow_data)
-        temporal_values = extractor.transform_row(nfstream_to_temporal_dict(flow_data))
+        temporal_values = (
+            extractor.transform_row(nfstream_to_temporal_dict(flow_data))
+            if temporal_mode == "calculate" and extractor is not None
+            else {name: 0.0 for name in config.TEMPORAL_FEATURES}
+        )
         first_seen_ms = float(flow_data.get("bidirectional_first_seen_ms", 0) or 0)
         packet_records = list(getattr(getattr(flow, "udps", object()), "packet_records", []) or [])
         record: dict[str, object] = {

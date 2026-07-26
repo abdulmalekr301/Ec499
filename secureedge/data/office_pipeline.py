@@ -28,22 +28,27 @@ import psutil
 from secureedge import config
 from secureedge.data.graph_builder import build_compact_graph_record
 from secureedge.data.pcap_flows import iter_flow_records
+from secureedge.office.config import load_office_config
+from secureedge.office.flow_identity import CanonicalFlowKey
 from secureedge.office.manifests import DEFAULT_CUMULATIVE_PATH, DEFAULT_DONE_REGISTRY_PATH, DoneRegistry
+from secureedge.office.temporal_index import TemporalIndex, load_temporal_index, lookup_temporal_features
 from secureedge.utils import ensure_directories, write_context
 
 
-OFFICE_DATASET_ROOT = config.ROOT_DIR / "datasets" / "cic_ids_2018"
-OFFICE_IMPROVED_CSV_DIR = OFFICE_DATASET_ROOT / "improved-csv" / "CSECICIDS2018_improved"
-OFFICE_2017_IMPROVED_CSV_DIR = OFFICE_DATASET_ROOT / "improved-csv" / "CICIDS2017_improved"
-OFFICE_ORIGINAL_CSV_DIR = OFFICE_DATASET_ROOT / "csv"
-OFFICE_RAW_PCAP_DIR = OFFICE_DATASET_ROOT / "raw_pcaps"
-OFFICE_2017_RAW_PCAP_PATH = OFFICE_DATASET_ROOT / "cic_ids_2017" / "raw_pcaps" / "Thursday-WorkingHours.pcap"
-OFFICE_ARTIFACT_DIR = config.ARTIFACTS_DIR / "office_model"
+_OFFICE_CONFIG = load_office_config()
+
+OFFICE_DATASET_ROOT = _OFFICE_CONFIG.dataset_root
+OFFICE_IMPROVED_CSV_DIR = _OFFICE_CONFIG.resolve_path("improved_csv")
+OFFICE_2017_IMPROVED_CSV_DIR = _OFFICE_CONFIG.resolve_path("cicids2017_improved_csv")
+OFFICE_ORIGINAL_CSV_DIR = _OFFICE_CONFIG.resolve_path("original_csv")
+OFFICE_RAW_PCAP_DIR = _OFFICE_CONFIG.raw_pcaps_dir
+OFFICE_2017_RAW_PCAP_PATH = _OFFICE_CONFIG.resolve_path("cicids2017_raw_pcap")
+OFFICE_ARTIFACT_DIR = _OFFICE_CONFIG.artifacts_dir
 OFFICE_CONTEXT_PREFIX = "64_office_model_graph_generation_pipeline"
 OFFICE_CANDIDATE_DIR = OFFICE_ARTIFACT_DIR / "candidate_flows"
 OFFICE_FINAL_SPLIT_DIR = OFFICE_ARTIFACT_DIR / "final_candidate_splits"
 OFFICE_PILOT_GRAPH_DIR = OFFICE_ARTIFACT_DIR / "pilot_graphs"
-OFFICE_COMPACT_GRAPH_DIR = config.GRAPH_DIR / "office_compact"
+OFFICE_COMPACT_GRAPH_DIR = _OFFICE_CONFIG.compact_root
 OFFICE_MATERIALIZATION_WORK_DIR = OFFICE_ARTIFACT_DIR / "materialization_work"
 OFFICE_PCAP_SLICE_DIR = OFFICE_MATERIALIZATION_WORK_DIR / "pcap_slices"
 OFFICE_COMPACT_MANIFEST_PATH = OFFICE_ARTIFACT_DIR / "office_compact_graph_manifest.json"
@@ -56,19 +61,22 @@ OFFICE_FINAL_SPLIT_MANIFEST_PATH = OFFICE_ARTIFACT_DIR / "final_candidate_split_
 OFFICE_WEB_ATTEMPT_AUDIT_PATH = OFFICE_ARTIFACT_DIR / "webbased_attempted_payload_audit.json"
 OFFICE_2017_WEB_AUGMENT_PATH = OFFICE_ARTIFACT_DIR / "cicids2017_webbased_augmentation_manifest.json"
 
-OFFICE_CLASS_NAMES = ["Benign", "BruteForce", "DoS", "DDoS", "WebBased", "Bot", "Infiltration"]
+OFFICE_CLASS_NAMES = _OFFICE_CONFIG.class_names
 OFFICE_ATTACK_CLASSES = [name for name in OFFICE_CLASS_NAMES if name != "Benign"]
 OFFICE_CLASS_TO_INDEX = {name: index for index, name in enumerate(OFFICE_CLASS_NAMES)}
-OFFICE_STANDARD_TRAIN_TARGET = 20_000
-OFFICE_STANDARD_VAL_TARGET = 2_000
-OFFICE_STANDARD_TEST_TARGET = 2_000
+_OFFICE_SPLITS = _OFFICE_CONFIG.split_targets
+OFFICE_STANDARD_TRAIN_TARGET = _OFFICE_SPLITS.standard_train
+OFFICE_STANDARD_VAL_TARGET = _OFFICE_SPLITS.standard_val
+OFFICE_STANDARD_TEST_TARGET = _OFFICE_SPLITS.standard_test
 OFFICE_STANDARD_POOL_TARGET = OFFICE_STANDARD_TRAIN_TARGET + OFFICE_STANDARD_VAL_TARGET + OFFICE_STANDARD_TEST_TARGET
-OFFICE_WEB_TRAIN_NATIVE_TARGET = 206
-OFFICE_WEB_VAL_TARGET = 103
-OFFICE_WEB_TEST_TARGET = 103
-OFFICE_WEB_TRAIN_TARGET = 6_000
-OFFICE_PRESLICE_CLASSES = {"BruteForce", "DoS", "DDoS"}
-OFFICE_PRESLICE_TIME_WINDOW_SECONDS = float(os.getenv("SECUREEDGE_OFFICE_PRESLICE_TIME_WINDOW_SECONDS", "30"))
+OFFICE_WEB_TRAIN_NATIVE_TARGET = _OFFICE_SPLITS.webbased_native_train
+OFFICE_WEB_VAL_TARGET = _OFFICE_SPLITS.webbased_val
+OFFICE_WEB_TEST_TARGET = _OFFICE_SPLITS.webbased_test
+OFFICE_WEB_TRAIN_TARGET = _OFFICE_SPLITS.webbased_train_target
+OFFICE_PRESLICE_CLASSES = _OFFICE_CONFIG.preslice_classes
+OFFICE_PRESLICE_TIME_WINDOW_SECONDS = float(
+    os.getenv("SECUREEDGE_OFFICE_PRESLICE_TIME_WINDOW_SECONDS", str(_OFFICE_CONFIG.preslice_time_window_seconds))
+)
 OFFICE_ALLOW_FULL_MATERIALIZATION = os.getenv("SECUREEDGE_ALLOW_FULL_OFFICE_MATERIALIZATION", "0") == "1"
 OFFICE_PROCESS = psutil.Process()
 
@@ -310,6 +318,45 @@ CICIDS2017_WEB_ATTACK_WINDOWS: tuple[OfficeAttackWindow, ...] = (
 )
 
 
+def _office_day_specs_from_config() -> tuple[OfficeDaySpec, ...]:
+    return tuple(
+        OfficeDaySpec(
+            day=str(item["day"]),
+            target_classes=tuple(str(value) for value in item.get("target_classes", [])),
+            expected_subtypes=tuple(str(value) for value in item.get("expected_subtypes", [])),
+        )
+        for item in _OFFICE_CONFIG.data["day_specs"]
+    )
+
+
+def _office_windows_from_config(section: str) -> tuple[OfficeAttackWindow, ...]:
+    return tuple(
+        OfficeAttackWindow(
+            day=window.day,
+            subtype=window.subtype,
+            class_name=window.class_name,
+            attacker_ips=window.attacker_ips,
+            victim_ips=window.victim_ips,
+            start=window.start,
+            finish=window.finish,
+        )
+        for window in (
+            _OFFICE_CONFIG.attack_windows
+            if section == "attack_windows"
+            else _OFFICE_CONFIG.cicids2017_web_attack_windows
+        )
+    )
+
+
+OFFICE_DAY_SPECS = _office_day_specs_from_config()
+OFFICE_ATTACK_WINDOWS = _office_windows_from_config("attack_windows")
+CICIDS2017_WEB_ATTACK_WINDOWS = _office_windows_from_config("cicids2017_web_attack_windows")
+_ATTACK_WINDOWS_BY_DAY = {}
+for _window in OFFICE_ATTACK_WINDOWS:
+    _ATTACK_WINDOWS_BY_DAY.setdefault(_window.day, ())
+    _ATTACK_WINDOWS_BY_DAY[_window.day] = (*_ATTACK_WINDOWS_BY_DAY[_window.day], _window)
+
+
 LABEL_TO_CLASS = {
     "benign": "Benign",
     "benigntraffic": "Benign",
@@ -459,6 +506,52 @@ def candidate_timestamp_seconds(candidate: dict[str, object]) -> float | None:
     if timestamp is None:
         return None
     return timestamp.replace(tzinfo=timezone.utc).timestamp()
+
+
+def _candidate_int(value: object) -> int:
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def candidate_temporal_key(candidate: dict[str, object]) -> CanonicalFlowKey | None:
+    timestamp_seconds = candidate_timestamp_seconds(candidate)
+    if timestamp_seconds is None:
+        return None
+    return CanonicalFlowKey(
+        day=str(candidate.get("day", "")),
+        src_ip=str(candidate.get("src_ip", "")),
+        src_port=_candidate_int(candidate.get("src_port", 0)),
+        dst_ip=str(candidate.get("dst_ip", "")),
+        dst_port=_candidate_int(candidate.get("dst_port", 0)),
+        protocol=_candidate_int(candidate.get("protocol", 0)),
+        first_seen_ms=int(round(timestamp_seconds * 1000.0)),
+    )
+
+
+def attach_candidate_temporal_features(
+    candidates: list[dict[str, object]],
+    temporal_index: TemporalIndex | None,
+    *,
+    tolerance_ms: int,
+) -> list[dict[str, object]]:
+    if temporal_index is None:
+        return candidates
+    enriched: list[dict[str, object]] = []
+    for candidate in candidates:
+        item = dict(candidate)
+        key = candidate_temporal_key(item)
+        if key is None:
+            item["temporal_context_status"] = "missing_timestamp"
+        else:
+            try:
+                item["temporal_features"] = lookup_temporal_features(temporal_index, key, tolerance_ms=tolerance_ms)
+                item["temporal_context_status"] = "full"
+            except (KeyError, ValueError) as exc:
+                item["temporal_context_status"] = str(exc).split(" ", 1)[0].strip("'")
+        enriched.append(item)
+    return enriched
 
 
 def csv_row_timestamp_seconds(row: dict[str, str]) -> float | None:
@@ -3706,6 +3799,7 @@ def materialize_office_pcap_candidates(
     overwrite: bool,
     timestamp_tolerance_seconds: float,
     max_flows_per_pcap: int,
+    allow_local_temporal_fallback: bool = False,
 ) -> dict[str, object]:
     pcap = Path(pcap_path)
     pending = {str(candidate["flow_hash"]): candidate for candidate in candidates}
@@ -3718,6 +3812,8 @@ def materialize_office_pcap_candidates(
     materialized_paths: dict[str, str] = {}
     materialized_flow_hashes: list[str] = []
     zero_packet_flow_hashes: list[str] = []
+    temporal_context_missing_flow_hashes: list[str] = []
+    local_temporal_fallback_flow_hashes: list[str] = []
     class_counts: Counter[str] = Counter()
     source_counts: Counter[str] = Counter()
     safety_summary: Counter[str] = Counter()
@@ -3737,6 +3833,8 @@ def materialize_office_pcap_candidates(
             "materialized_paths": materialized_paths,
             "materialized_flow_hashes": materialized_flow_hashes,
             "zero_packet_flow_hashes": zero_packet_flow_hashes,
+            "temporal_context_missing_flow_hashes": temporal_context_missing_flow_hashes,
+            "local_temporal_fallback_flow_hashes": local_temporal_fallback_flow_hashes,
             "class_counts": {},
             "source_counts": {},
             "safety_summary": {},
@@ -3749,6 +3847,7 @@ def materialize_office_pcap_candidates(
                 pcap,
                 "office_materialization_worker",
                 flow_key_filter=set(tuple_to_candidates),
+                temporal_mode="calculate" if allow_local_temporal_fallback else "disabled",
             ),
             start=1,
         ):
@@ -3768,9 +3867,33 @@ def materialize_office_pcap_candidates(
                 candidate_ts = candidate_timestamp_seconds(candidate)
                 if candidate_ts is not None and abs(flow_timestamp - candidate_ts) > timestamp_tolerance_seconds:
                     continue
+                temporal_features = candidate.get("temporal_features") or candidate.get("precomputed_temporal_features")
+                temporal_context_status = str(candidate.get("temporal_context_status", "full" if isinstance(temporal_features, dict) else ""))
+                if not isinstance(temporal_features, dict):
+                    fallback_features = flow_record.get("temporal_features") if allow_local_temporal_fallback else None
+                    if isinstance(fallback_features, dict):
+                        temporal_features = {str(key): float(value) for key, value in fallback_features.items()}
+                        temporal_context_status = "local_worker_fallback"
+                        local_temporal_fallback_flow_hashes.append(flow_hash)
+                        safety_summary["LOCAL_TEMPORAL_CONTEXT_FALLBACK"] += 1
+                    else:
+                        pending.pop(flow_hash, None)
+                        matched += 1
+                        temporal_context_missing_flow_hashes.append(flow_hash)
+                        safety_summary["TEMPORAL_CONTEXT_MISSING"] += 1
+                        if len(safety_samples) < 25:
+                            safety_samples.append(
+                                {
+                                    "flow_hash": flow_hash,
+                                    "class_name": candidate.get("class_name"),
+                                    "day": candidate.get("day"),
+                                    "reason": "TEMPORAL_CONTEXT_MISSING",
+                                }
+                            )
+                        continue
                 compact = build_compact_graph_record(
                     flow_record["flow_features"],
-                    flow_record["temporal_features"],
+                    temporal_features,
                     flow_record["packet_records"],
                     int(candidate["class_index"]),
                     str(candidate.get("gt_subtype") or candidate.get("label") or candidate["class_name"]),
@@ -3785,6 +3908,7 @@ def materialize_office_pcap_candidates(
                     safety_summary["matched_zero_packet_graph"] += 1
                     continue
                 compact = enrich_compact_record(compact, candidate)
+                compact["temporal_context_status"] = temporal_context_status
                 stats = graph_record_stats(compact)
                 flags = safety_flags(stats)
                 if flags:
@@ -3827,6 +3951,8 @@ def materialize_office_pcap_candidates(
             "materialized_paths": materialized_paths,
             "materialized_flow_hashes": materialized_flow_hashes,
             "zero_packet_flow_hashes": zero_packet_flow_hashes,
+            "temporal_context_missing_flow_hashes": temporal_context_missing_flow_hashes,
+            "local_temporal_fallback_flow_hashes": local_temporal_fallback_flow_hashes,
             "class_counts": dict(class_counts),
             "source_counts": dict(source_counts),
             "safety_summary": dict(safety_summary),
@@ -3843,6 +3969,8 @@ def materialize_office_pcap_candidates(
         "materialized_paths": materialized_paths,
         "materialized_flow_hashes": materialized_flow_hashes,
         "zero_packet_flow_hashes": zero_packet_flow_hashes,
+        "temporal_context_missing_flow_hashes": temporal_context_missing_flow_hashes,
+        "local_temporal_fallback_flow_hashes": local_temporal_fallback_flow_hashes,
         "class_counts": dict(class_counts),
         "source_counts": dict(source_counts),
         "safety_summary": dict(safety_summary),
@@ -3858,6 +3986,7 @@ def run_office_materialization_worker(
     overwrite: bool,
     timestamp_tolerance_seconds: float,
     max_flows_per_pcap: int,
+    allow_local_temporal_fallback: bool = False,
 ) -> dict[str, object]:
     candidates = read_candidate_jsonl(candidates_path)
     summary = materialize_office_pcap_candidates(
@@ -3866,6 +3995,7 @@ def run_office_materialization_worker(
         overwrite=overwrite,
         timestamp_tolerance_seconds=timestamp_tolerance_seconds,
         max_flows_per_pcap=max_flows_per_pcap,
+        allow_local_temporal_fallback=allow_local_temporal_fallback,
     )
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -3883,6 +4013,8 @@ def build_office_compact_graph_manifest(
     health_manifest_path: Path = OFFICE_COMPACT_MANIFEST_PATH,
     health_min_yield: float = 0.05,
     target_classes: set[str] | None = None,
+    temporal_index_path: Path | None = None,
+    allow_local_temporal_fallback: bool = False,
 ) -> dict[str, object]:
     ensure_directories()
     if limit_unique is None and not OFFICE_ALLOW_FULL_MATERIALIZATION:
@@ -3920,6 +4052,9 @@ def build_office_compact_graph_manifest(
         target_classes=target_classes,
         materialized_identities=set(materialized_identity_index),
     )
+    if temporal_index_path is not None and not temporal_index_path.exists():
+        raise FileNotFoundError(f"Office temporal index not found: {temporal_index_path}")
+    temporal_index = load_temporal_index(temporal_index_path) if temporal_index_path is not None else None
     if overwrite and OFFICE_COMPACT_GRAPH_DIR.exists():
         shutil.rmtree(OFFICE_COMPACT_GRAPH_DIR)
     OFFICE_COMPACT_GRAPH_DIR.mkdir(parents=True, exist_ok=True)
@@ -3960,6 +4095,11 @@ def build_office_compact_graph_manifest(
             stop_reason = "max_pcaps_reached"
             break
         pending = [candidate for candidate in pcap_candidates if str(candidate["flow_hash"]) in missing_by_hash]
+        pending = attach_candidate_temporal_features(
+            pending,
+            temporal_index,
+            tolerance_ms=int(round(timestamp_tolerance_seconds * 1000.0)),
+        )
         if not pending:
             continue
         processed_pcaps += 1
@@ -4009,6 +4149,8 @@ def build_office_compact_graph_manifest(
             "--office-max-flows-per-pcap",
             str(max_flows_per_pcap),
         ]
+        if allow_local_temporal_fallback:
+            command.append("--office-allow-local-temporal-fallback")
         if overwrite:
             command.append("--office-overwrite-compact")
         try:
@@ -4134,6 +4276,9 @@ def build_office_compact_graph_manifest(
         "limit_unique": limit_unique,
         "overwrite": overwrite,
         "timestamp_tolerance_seconds": timestamp_tolerance_seconds,
+        "temporal_index_path": str(temporal_index_path) if temporal_index_path is not None else None,
+        "temporal_index_loaded": temporal_index is not None,
+        "allow_local_temporal_fallback": allow_local_temporal_fallback,
         "max_flows_per_pcap": max_flows_per_pcap,
         "max_pcaps": max_pcaps,
         "target_classes": sorted(target_classes) if target_classes else [],
@@ -4483,6 +4628,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--office-health-aware", action="store_true", help="Skip/deprioritize PCAPs marked unhealthy by a previous office compact manifest.")
     parser.add_argument("--office-health-manifest", default=str(OFFICE_COMPACT_MANIFEST_PATH), help="Previous office compact manifest used for PCAP-health skips.")
     parser.add_argument("--office-health-min-yield", type=float, default=0.05, help="Skip previous PCAPs whose matched/candidate yield is below this threshold.")
+    parser.add_argument("--office-temporal-index", default="", help="Precomputed full-context temporal index JSON for office materialization.")
+    parser.add_argument("--office-allow-local-temporal-fallback", action="store_true", help="Compute worker-local temporal features when no full temporal index match is available.")
     parser.add_argument("--office-worker-pcap", default="")
     parser.add_argument("--office-worker-candidates", default="")
     parser.add_argument("--office-worker-summary", default="")
@@ -4547,6 +4694,8 @@ def main() -> None:
             health_manifest_path=Path(args.office_health_manifest),
             health_min_yield=args.office_health_min_yield,
             target_classes=set(args.office_target_class or []),
+            temporal_index_path=Path(args.office_temporal_index) if args.office_temporal_index else None,
+            allow_local_temporal_fallback=args.office_allow_local_temporal_fallback,
         )
         write_office_compact_context(manifest)
         print(json.dumps({"manifest": str(OFFICE_COMPACT_MANIFEST_PATH)}, indent=2))
@@ -4560,6 +4709,7 @@ def main() -> None:
             overwrite=args.office_overwrite_compact,
             timestamp_tolerance_seconds=args.office_timestamp_tolerance_seconds,
             max_flows_per_pcap=args.office_max_flows_per_pcap,
+            allow_local_temporal_fallback=args.office_allow_local_temporal_fallback,
         )
         print(json.dumps({"summary": args.office_worker_summary, "status": summary.get("status")}, indent=2))
     elif args.mode == "office-open-flow-diagnostic":

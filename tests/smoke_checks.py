@@ -20,9 +20,11 @@ from secureedge.data.office_pipeline import (
     pcap_ip_from_name,
     stratified_day_targets,
 )
-from secureedge.data.pcap_flows import FlowCapper, PacketCapture, nfstream_to_temporal_dict
+from secureedge.data.pcap_flows import FlowCapper, PacketCapture, iter_flow_records, nfstream_to_temporal_dict
 from secureedge.data.preprocess import canonical_label
 from secureedge.features.temporal import TemporalFeatureExtractor
+from secureedge.office.config import load_office_config
+from secureedge.office.flow_identity import CanonicalFlowKey, directed_flow_identity, direction_normalized_flow_hash
 
 
 def main() -> None:
@@ -54,6 +56,11 @@ def main() -> None:
     assert ("18.219.193.20", "172.31.69.25") in dos_pairs
     assert ("172.31.70.16", "172.31.69.25") in dos_pairs
     assert "host 18.219.193.20 and host 172.31.69.25" in office_preslice_bpf_for_pairs(dos_pairs)
+    office_config = load_office_config()
+    assert office_config.class_names == ["Benign", "BruteForce", "DoS", "DDoS", "WebBased", "Bot", "Infiltration"]
+    assert office_config.matching_tolerance_seconds == 3.0
+    assert office_config.preslice_classes == {"BruteForce", "DoS", "DDoS"}
+    assert office_config.split_targets.standard_train == 20000
     assert (
         ground_truth_window_for_row(
             {
@@ -125,8 +132,27 @@ def main() -> None:
     PacketCapture().on_init(Packet(), flow)
     assert len(flow.udps.packet_records) == 1
     assert len(flow.udps.packet_records[0]["payload"]) == config.N_PACKET_FEATURES
-    FlowCapper().on_update(None, flow)
-    assert flow.expiration_id == -1
+    old_segment_limit = config.FLOW_SEGMENT_PACKET_LIMIT
+    try:
+        config.FLOW_SEGMENT_PACKET_LIMIT = 0
+        FlowCapper().on_update(None, flow)
+        assert flow.expiration_id == 0
+        config.FLOW_SEGMENT_PACKET_LIMIT = config.FLOW_PACKET_LIMIT
+        FlowCapper().on_update(None, flow)
+        assert flow.expiration_id == -1
+    finally:
+        config.FLOW_SEGMENT_PACKET_LIMIT = old_segment_limit
+    try:
+        list(iter_flow_records(Path("missing.pcap"), "office", require_external_extractor=True))
+        raise AssertionError("require_external_extractor should reject implicit temporal state")
+    except ValueError as exc:
+        assert "explicitly managed temporal extractor" in str(exc)
+
+    key = CanonicalFlowKey("day", "10.0.0.1", 123, "10.0.0.2", 80, 6, 1000)
+    assert directed_flow_identity(key) == directed_flow_identity(key)
+    assert direction_normalized_flow_hash(key) == direction_normalized_flow_hash(
+        CanonicalFlowKey("day", "10.0.0.2", 80, "10.0.0.1", 123, 6, 1000)
+    )
 
     if config.ENABLE_ATTACKER_MAC_FILTER and config.ATTACKER_MACS:
         attacker_mac = next(iter(config.ATTACKER_MACS))

@@ -20,10 +20,11 @@ class GraphFileDataset(Dataset):
         return torch.load(self.paths[index], map_location="cpu", weights_only=False)
 
 
-def load_graph_manifest() -> dict:
-    if not config.GRAPH_MANIFEST_PATH.exists():
-        raise FileNotFoundError("Run `python -m secureedge.data.preprocess` before loading graph datasets.")
-    return json.loads(config.GRAPH_MANIFEST_PATH.read_text(encoding="utf-8"))
+def load_graph_manifest(path: str | Path = config.GRAPH_MANIFEST_PATH) -> dict:
+    manifest_path = Path(path)
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"Graph manifest not found: {manifest_path}. Run graph preprocessing before loading graph datasets.")
+    return json.loads(manifest_path.read_text(encoding="utf-8"))
 
 
 def split_paths(split: str, limit_per_class: int = 0) -> list[str]:
