@@ -233,6 +233,26 @@ splits:
     test: 103
   split_strategy: split_first_then_oversample_train_only
 
+imbalance:
+  webbased_policy:
+    target_policy: use_all_materialized_real_graphs_no_synthetic_webbased_generation
+    split_policy: keep_validation_and_test_native_only
+    cicids2017_usage: train_only_when_materialized
+    report_source_stratified_webbased: true
+    report_bootstrap_macro_f1_ci: true
+  loss:
+    name: weighted_cross_entropy
+    class_weighting:
+      method: effective_number
+      beta: 0.9999
+      normalize_mean_to_one: true
+      max_weight: 8.0
+  balanced_batches:
+    enabled: true
+    method: weighted_random_sampler
+    replacement: true
+    sample_weighting: inverse_class_frequency
+
 graph:
   flow_features: 92
   packet_bytes: 1500
@@ -244,4 +264,3 @@ architecture_policy:
   future_attention_conv: GATv2Conv
   do_not_use: SAGEConv
   rationale: "The office model should keep attention-based neighbor aggregation. SAGEConv is intentionally rejected because mean aggregation treats neighbors uniformly; GATv2Conv is reserved for the architecture-change phase."
-

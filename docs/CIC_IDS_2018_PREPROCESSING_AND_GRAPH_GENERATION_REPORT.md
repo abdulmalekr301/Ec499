@@ -1204,6 +1204,21 @@ Approximate completion by stage:
 | Use balanced batches | High | Training loader config |
 | Report macro metrics and WebBased confidence | High | Evaluation report |
 
+Phase 6 implementation status as of 2026-07-29:
+
+| Item | Current state |
+| --- | --- |
+| WebBased target policy | Use all materialized real WebBased graphs; keep validation/test native-only; use CICIDS2017 train-only data only when materialized |
+| Materialized WebBased split counts | Train 206, validation 103, test 103 |
+| CICIDS2017 train-only shortfall | 167 configured train-only WebBased references did not materialize into the current graph dataset |
+| Training loss | `weighted_cross_entropy` with effective-number train-only class weights, `beta=0.9999`, max weight `8.0` |
+| Current WebBased loss weight | `6.13131` from the current train split only |
+| Balanced batches | Enabled with `weighted_random_sampler`, replacement, inverse-class-frequency sample weights |
+| Training config source | `configs/office_cic_ids_2018.yaml` `imbalance` section |
+| Audit artifact | `artifacts/office_model/office_imbalance_policy.json` |
+
+The current imbalance handling is training-only. Validation and test counts are not used for class weights or sampler weights, and the test split remains unloaded during training.
+
 ### Phase 7: Integrate With the Model
 
 | Task | Priority | Output |

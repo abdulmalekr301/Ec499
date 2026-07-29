@@ -28,6 +28,7 @@ TOP_LEVEL_KEYS = {
     "slicing",
     "materialization",
     "splits",
+    "imbalance",
     "graph",
     "architecture_policy",
 }
@@ -155,6 +156,10 @@ class OfficeConfig:
     def architecture_policy(self) -> dict[str, Any]:
         return dict(self.data["architecture_policy"])
 
+    @property
+    def imbalance_policy(self) -> dict[str, Any]:
+        return dict(self.data["imbalance"])
+
     def resolve_path(self, key: str) -> Path:
         value = self.data["paths"][key]
         path = Path(str(value))
@@ -248,9 +253,15 @@ def _validate_config(data: dict[str, Any]) -> None:
         raise ValueError("Architecture policy must preserve the explicit SAGEConv rejection")
     if data["architecture_policy"]["future_attention_conv"] != "GATv2Conv":
         raise ValueError("Future attention convolution must be GATv2Conv")
-    for key in ("paths", "labels", "matching", "slicing", "materialization", "splits", "graph"):
+    for key in ("paths", "labels", "matching", "slicing", "materialization", "splits", "imbalance", "graph"):
         if not isinstance(data[key], dict):
             raise ValueError(f"Office config section {key!r} must be a mapping")
+    loss_name = str(data["imbalance"].get("loss", {}).get("name", ""))
+    if loss_name not in {"plain_cross_entropy", "cross_entropy", "weighted_cross_entropy"}:
+        raise ValueError(f"Unsupported office imbalance loss: {loss_name!r}")
+    sampler_method = str(data["imbalance"].get("balanced_batches", {}).get("method", ""))
+    if sampler_method not in {"none", "weighted_random_sampler"}:
+        raise ValueError(f"Unsupported office balanced batch method: {sampler_method!r}")
 
 
 def load_office_config(path: Path = DEFAULT_OFFICE_CONFIG_PATH) -> OfficeConfig:

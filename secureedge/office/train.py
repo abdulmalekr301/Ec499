@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch import nn
+from torch.utils.data import WeightedRandomSampler
 
 from secureedge import config as root_config
 from secureedge.models.hgnn import SecureEdgeHGNN
@@ -21,6 +22,11 @@ from secureedge.models.train import (
 )
 from secureedge.office.build_graphs import DEFAULT_MANIFEST_PATH
 from secureedge.office.config import DEFAULT_OFFICE_CONFIG_PATH, load_office_config
+from secureedge.office.imbalance import (
+    calculate_class_weights,
+    sample_weights_from_class_counts,
+    split_class_counts_from_manifest,
+)
 from secureedge.office.manifests import stable_json_hash
 from secureedge.training.engine import (
     TrainingContext,
@@ -87,6 +93,30 @@ def train_office_model(
         raise ValueError("SECUREEDGE_GRAD_ACCUM_STEPS must be >= 1.")
     device = training_device()
     DataLoader = require_pyg_dataloader()
+    office_config = load_office_config(config_path)
+    train_class_counts = split_class_counts_from_manifest(
+        manifest,
+        "train",
+        context.class_names,
+        limit_per_class=root_config.TRAIN_LIMIT_PER_CLASS,
+    )
+    class_weights, class_weight_summary = calculate_class_weights(
+        train_class_counts,
+        context.class_names,
+        office_config.imbalance_policy,
+    )
+    sample_weights, balanced_sampler = sample_weights_from_class_counts(
+        train_class_counts,
+        context.class_names,
+        office_config.imbalance_policy,
+    )
+    train_sampler = None
+    if sample_weights is not None:
+        train_sampler = WeightedRandomSampler(
+            torch.as_tensor(sample_weights, dtype=torch.double),
+            num_samples=len(sample_weights),
+            replacement=bool(balanced_sampler.get("replacement", True)),
+        )
     train_dataset = load_graph_dataset_from_manifest(
         manifest,
         "train",
@@ -102,7 +132,8 @@ def train_office_model(
     train_loader = DataLoader(
         train_dataset,
         batch_size=root_config.BATCH_SIZE,
-        shuffle=True,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
         **make_loader_kwargs(device),
     )
     val_loader = DataLoader(
@@ -113,7 +144,10 @@ def train_office_model(
     )
 
     model = SecureEdgeHGNN(num_classes=len(context.class_names)).to(device)
-    criterion = nn.CrossEntropyLoss()
+    class_weight_tensor = None
+    if class_weights is not None:
+        class_weight_tensor = torch.tensor(class_weights, dtype=torch.float32, device=device)
+    criterion = nn.CrossEntropyLoss(weight=class_weight_tensor)
     optimizer = torch.optim.Adam(model.parameters(), lr=root_config.LEARNING_RATE, weight_decay=root_config.WEIGHT_DECAY)
     use_amp = amp_is_enabled(device)
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
@@ -140,6 +174,10 @@ def train_office_model(
         "use_amp": use_amp,
         "amp_disabled_reason": amp_disabled_reason(device),
         "allow_incomplete_development_run": allow_incomplete_development_run,
+        "imbalance_policy": office_config.imbalance_policy,
+        "train_class_counts": train_class_counts,
+        "class_weight_summary": class_weight_summary,
+        "balanced_batches": balanced_sampler,
     }
     training_config_hash = stable_json_hash(run_config)
 
