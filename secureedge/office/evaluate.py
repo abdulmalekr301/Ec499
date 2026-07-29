@@ -205,6 +205,7 @@ def evaluate_office_model(
             "graph_manifest_path": str(graph_manifest_path),
             "graph_manifest_hash": manifest.get("manifest_hash"),
             "checkpoint_graph_manifest_hash": checkpoint.get("graph_manifest_hash"),
+            "model_attention_conv": checkpoint.get("model_attention_conv", getattr(model, "attention_conv", "unknown")),
             "source_stratified_webbased": source_stratified_webbased_metrics(predictions, targets, metadata, class_names),
             "bootstrap_macro_f1_ci": bootstrap_macro_f1_ci(
                 predictions,

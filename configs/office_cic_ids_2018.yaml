@@ -260,7 +260,7 @@ graph:
   compact_feature_version: xgnid_76_plus_temporal_16
 
 architecture_policy:
-  current_attention_conv: GATConv
+  current_attention_conv: GATv2Conv
   future_attention_conv: GATv2Conv
   do_not_use: SAGEConv
-  rationale: "The office model should keep attention-based neighbor aggregation. SAGEConv is intentionally rejected because mean aggregation treats neighbors uniformly; GATv2Conv is reserved for the architecture-change phase."
+  rationale: "The office model keeps attention-based neighbor aggregation and now uses GATv2Conv for the office training phase. SAGEConv is intentionally rejected because mean aggregation treats neighbors uniformly."

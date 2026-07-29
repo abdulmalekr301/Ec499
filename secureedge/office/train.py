@@ -164,6 +164,7 @@ def train_office_model(
         "graph_manifest_path": str(graph_manifest_path),
         "graph_manifest_hash": context.manifest_hash,
         "class_names": context.class_names,
+        "model_attention_conv": office_config.architecture_policy["current_attention_conv"],
         "checkpoint_selection_split": "val",
         "test_split_loaded_during_training": False,
         "batch_size": root_config.BATCH_SIZE,
@@ -252,6 +253,7 @@ def train_office_model(
                 "test_split_loaded_during_training": False,
                 "epoch": epoch,
                 "model": "SecureEdgeHGNN",
+                "model_attention_conv": office_config.architecture_policy["current_attention_conv"],
                 "num_classes": len(context.class_names),
             }
             checkpoint_path.parent.mkdir(parents=True, exist_ok=True)

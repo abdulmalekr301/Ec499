@@ -251,6 +251,8 @@ def _validate_config(data: dict[str, Any]) -> None:
         raise ValueError("Office class names must be unique")
     if data["architecture_policy"]["do_not_use"] != "SAGEConv":
         raise ValueError("Architecture policy must preserve the explicit SAGEConv rejection")
+    if data["architecture_policy"]["current_attention_conv"] != "GATv2Conv":
+        raise ValueError("Office training must use GATv2Conv for the current attention convolution")
     if data["architecture_policy"]["future_attention_conv"] != "GATv2Conv":
         raise ValueError("Future attention convolution must be GATv2Conv")
     for key in ("paths", "labels", "matching", "slicing", "materialization", "splits", "imbalance", "graph"):

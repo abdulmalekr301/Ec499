@@ -9,14 +9,14 @@ from secureedge.utils import write_context
 
 def require_pyg_layers():
     try:
-        from torch_geometric.nn import GATConv, HeteroConv, global_mean_pool
+        from torch_geometric.nn import GATv2Conv, HeteroConv, global_mean_pool
     except ModuleNotFoundError as exc:
         raise ModuleNotFoundError(
             "PyTorch Geometric is required for SecureEdgeHGNN. Install torch-geometric "
             "and the matching torch-scatter/torch-sparse/torch-cluster wheels for the "
             "active Torch build."
         ) from exc
-    return GATConv, HeteroConv, global_mean_pool
+    return GATv2Conv, HeteroConv, global_mean_pool
 
 
 class SecureEdgeHGNN(nn.Module):
@@ -27,7 +27,8 @@ class SecureEdgeHGNN(nn.Module):
         leaky_relu_slope: float = config.HGNN_LEAKY_RELU_SLOPE,
     ) -> None:
         super().__init__()
-        GATConv, HeteroConv, global_mean_pool = require_pyg_layers()
+        GATv2Conv, HeteroConv, global_mean_pool = require_pyg_layers()
+        self.attention_conv = "GATv2Conv"
         self.global_mean_pool = global_mean_pool
         self.use_payload_encoder = config.USE_PAYLOAD_ENCODER
         self.packet_encoder = (
@@ -54,7 +55,7 @@ class SecureEdgeHGNN(nn.Module):
         )
         self.conv1 = HeteroConv(
             {
-                ("flow", "contains", "packet"): GATConv(
+                ("flow", "contains", "packet"): GATv2Conv(
                     (-1, -1),
                     config.HGNN_ATTN_SIZE,
                     heads=2,
@@ -62,7 +63,7 @@ class SecureEdgeHGNN(nn.Module):
                     edge_dim=config.N_CONTAIN_EDGE_FEATS,
                     add_self_loops=False,
                 ),
-                ("packet", "rev_contains", "flow"): GATConv(
+                ("packet", "rev_contains", "flow"): GATv2Conv(
                     (-1, -1),
                     config.HGNN_ATTN_SIZE,
                     heads=2,
@@ -70,7 +71,7 @@ class SecureEdgeHGNN(nn.Module):
                     edge_dim=config.N_CONTAIN_EDGE_FEATS,
                     add_self_loops=False,
                 ),
-                ("packet", "linked_to", "packet"): GATConv(
+                ("packet", "linked_to", "packet"): GATv2Conv(
                     (-1, -1),
                     config.HGNN_ATTN_SIZE,
                     heads=2,
@@ -85,7 +86,7 @@ class SecureEdgeHGNN(nn.Module):
         self.bn_packet_1 = nn.BatchNorm1d(hidden_size, eps=config.HGNN_BATCHNORM_EPS)
         self.conv2 = HeteroConv(
             {
-                ("flow", "contains", "packet"): GATConv(
+                ("flow", "contains", "packet"): GATv2Conv(
                     (-1, -1),
                     config.HGNN_ATTN_SIZE,
                     heads=2,
@@ -93,7 +94,7 @@ class SecureEdgeHGNN(nn.Module):
                     edge_dim=config.N_CONTAIN_EDGE_FEATS,
                     add_self_loops=False,
                 ),
-                ("packet", "rev_contains", "flow"): GATConv(
+                ("packet", "rev_contains", "flow"): GATv2Conv(
                     (-1, -1),
                     config.HGNN_ATTN_SIZE,
                     heads=2,
@@ -101,7 +102,7 @@ class SecureEdgeHGNN(nn.Module):
                     edge_dim=config.N_CONTAIN_EDGE_FEATS,
                     add_self_loops=False,
                 ),
-                ("packet", "linked_to", "packet"): GATConv(
+                ("packet", "linked_to", "packet"): GATv2Conv(
                     (-1, -1),
                     config.HGNN_ATTN_SIZE,
                     heads=2,
@@ -163,14 +164,14 @@ def document_architecture() -> None:
         [
             "## Action",
             "- Deprecated the flat MLP path and added `secureedge.models.hgnn.SecureEdgeHGNN`.",
-            "- Implemented two heterogeneous GAT layers with flow-to-packet, packet-to-flow, and packet-to-packet edge types.",
+            "- Implemented two heterogeneous GATv2 layers with flow-to-packet, packet-to-flow, and packet-to-packet edge types.",
             f"- Flow node input dimension: `{config.N_FLOW_NODE_FEATURES}`.",
             f"- Packet node input dimension: `{config.N_PACKET_FEATURES}`.",
             f"- Optional packet payload CNN encoder enabled: `{config.USE_PAYLOAD_ENCODER}`.",
             f"- Hidden size: `{config.HGNN_HIDDEN_SIZE}`.",
             f"- BatchNorm epsilon: `{config.HGNN_BATCHNORM_EPS}`.",
-            f"- GAT attention: `heads=2`, `attention size={config.HGNN_ATTN_SIZE}`, concatenated output `{config.HGNN_ATTN_SIZE * 2}`.",
-            "- Note: multi-head GAT remains a SecureEdge enhancement; the XG-NID repo comparison showed `attn_size` is dead code in the upstream model.",
+            f"- GATv2 attention: `heads=2`, `attention size={config.HGNN_ATTN_SIZE}`, concatenated output `{config.HGNN_ATTN_SIZE * 2}`.",
+            "- Note: multi-head GATv2 remains a SecureEdge enhancement; the XG-NID repo comparison showed `attn_size` is dead code in the upstream model.",
             "- Both HGNN layers receive edge attributes for contain, reverse-contain, and packet-link relations.",
             f"- Graph readout mode: `{config.HGNN_READOUT_MODE}`.",
             "- With concat readout, the classifier head receives a 128-dimensional flow+packet embedding.",
