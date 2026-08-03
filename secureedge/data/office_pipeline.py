@@ -813,11 +813,19 @@ def packet_flow_tuple(packet: bytes) -> tuple[str, str, str, str, str] | None:
     if ihl < 20 or len(packet) < offset + ihl + 4:
         return None
     protocol = packet[offset + 9]
-    if protocol not in {6, 17}:
+    if protocol not in {1, 6, 17}:
         return None
     flags_fragment = struct.unpack("!H", packet[offset + 6 : offset + 8])[0]
     if flags_fragment & 0x1FFF:
         return None
+    if protocol == 1:
+        return (
+            ipv4_text(packet[offset + 12 : offset + 16]),
+            ipv4_text(packet[offset + 16 : offset + 20]),
+            "0",
+            "0",
+            str(protocol),
+        )
     transport_offset = offset + ihl
     src_port, dst_port = struct.unpack("!HH", packet[transport_offset : transport_offset + 4])
     return (
@@ -3170,12 +3178,35 @@ def enrich_compact_record(record: dict[str, object], candidate: dict[str, object
         "day",
         "source",
         "source_dataset",
+        "gt_subtype",
         "split_scope",
         "candidate_split",
         "endpoint_selection",
+        "recovered_attempted",
+        "selection_policy",
+        "exception_policy",
+        "exception_reason",
+        "attempted_category",
+        "csv_attempted_category",
+        "exception_rank",
+        "evidence_score",
+        "evidence_rank_tuple",
+        "selection_group",
+        "reference_profile_id",
+        "reference_distance",
+        "reference_similarity",
+        "original_csv_class",
+        "original_label_status",
+        "exception_source_class",
+        "attacker_private_ip",
+        "attacker_public_ip",
+        "victim_private_ip",
+        "victim_public_ip",
     ):
         if key in candidate:
             enriched[key] = candidate[key]
+    if "label" in candidate:
+        enriched["candidate_label"] = candidate["label"]
     enriched["candidate_timestamp"] = str(candidate.get("timestamp", ""))
     enriched["candidate_identity"] = materialization_identity(candidate)
     enriched["compact_tensor_hash"] = compact_tensor_hash(enriched)
