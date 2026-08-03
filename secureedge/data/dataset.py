@@ -17,7 +17,18 @@ class GraphFileDataset(Dataset):
         return len(self.paths)
 
     def __getitem__(self, index: int):
-        return torch.load(self.paths[index], map_location="cpu", weights_only=False)
+        graph = torch.load(self.paths[index], map_location="cpu", weights_only=False)
+        if hasattr(graph, "office_candidate_identity"):
+            for key in (
+                "candidate_split",
+                "endpoint_selection",
+                "flow_hash",
+                "source",
+                "source_order",
+            ):
+                if not hasattr(graph, key):
+                    setattr(graph, key, "")
+        return graph
 
 
 def load_graph_manifest(path: str | Path = config.GRAPH_MANIFEST_PATH) -> dict:

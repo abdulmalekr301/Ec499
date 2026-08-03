@@ -66,6 +66,44 @@ def load_graph_dataset_from_manifest(
     return GraphFileDataset(split_paths_from_manifest(manifest, split, class_names, limit_per_class=limit_per_class))
 
 
+class TemporalMaskedGraphDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset: torch.utils.data.Dataset, temporal_feature_indices: list[int]) -> None:
+        self.dataset = dataset
+        self.temporal_feature_indices = [int(index) for index in temporal_feature_indices]
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, index: int):
+        graph = self.dataset[index].clone()
+        if self.temporal_feature_indices:
+            graph["flow"].x[:, self.temporal_feature_indices] = 0.0
+        graph.temporal_features_masked = bool(self.temporal_feature_indices)
+        return graph
+
+
+def temporal_feature_indices_from_manifest(manifest: dict[str, Any]) -> list[int]:
+    policy = dict(manifest.get("final_training_policy", {}))
+    if not bool(policy.get("mask_temporal_features", False)):
+        return []
+    configured = policy.get("temporal_feature_indices")
+    if isinstance(configured, list):
+        return [int(index) for index in configured]
+    names = list(manifest.get("flow_feature_names", []))
+    return [
+        index
+        for index, name in enumerate(names)
+        if str(name).startswith("Rolling_") or str(name) == "Unique_Ports_In_SourceDestination"
+    ]
+
+
+def maybe_mask_temporal_dataset(dataset: torch.utils.data.Dataset, manifest: dict[str, Any]) -> torch.utils.data.Dataset:
+    temporal_indices = temporal_feature_indices_from_manifest(manifest)
+    if not temporal_indices:
+        return dataset
+    return TemporalMaskedGraphDataset(dataset, temporal_indices)
+
+
 def validate_training_context(
     context: TrainingContext,
     manifest: dict[str, Any],
@@ -169,3 +207,72 @@ def predict_loader(model, loader, device: torch.device) -> tuple[np.ndarray, np.
             targets.append(batch.y.view(-1).cpu().numpy())
             batches.append(batch.cpu())
     return np.concatenate(predictions), np.concatenate(targets), batches
+
+
+def _as_list(value: object, length: int) -> list[object]:
+    if isinstance(value, list | tuple):
+        return list(value)
+    return [value for _ in range(length)]
+
+
+def metadata_from_batches(batches: list[Any]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for batch in batches:
+        count = int(batch.y.view(-1).shape[0])
+        class_names = _as_list(getattr(batch, "class_name", ""), count)
+        subtypes = _as_list(getattr(batch, "subtype_label", "no_subtype"), count)
+        days = _as_list(getattr(batch, "day", "unknown"), count)
+        sources = _as_list(getattr(batch, "source_dataset", "unknown"), count)
+        candidate_ids = _as_list(getattr(batch, "office_candidate_identity", ""), count)
+        graph_ids = _as_list(getattr(batch, "graph_id", ""), count)
+        for class_name, subtype, day, source, candidate_id, graph_id in zip(
+            class_names,
+            subtypes,
+            days,
+            sources,
+            candidate_ids,
+            graph_ids,
+            strict=False,
+        ):
+            rows.append(
+                {
+                    "class_name": str(class_name),
+                    "subtype": str(subtype),
+                    "day": str(day),
+                    "source_dataset": str(source),
+                    "candidate_identity": str(candidate_id),
+                    "graph_id": str(graph_id),
+                }
+            )
+    return rows
+
+
+def subtype_recall_metrics(
+    predictions: np.ndarray,
+    targets: np.ndarray,
+    metadata: list[dict[str, str]],
+    class_names: list[str],
+) -> dict[str, dict[str, float | int | str]]:
+    rows: dict[str, list[int]] = {}
+    for index, row in enumerate(metadata):
+        class_name = row.get("class_name", "")
+        subtype = row.get("subtype", "no_subtype")
+        key = f"{class_name}|{subtype}"
+        rows.setdefault(key, []).append(index)
+    output: dict[str, dict[str, float | int | str]] = {}
+    for key, indices in sorted(rows.items()):
+        class_name, subtype = key.split("|", maxsplit=1)
+        if class_name not in class_names:
+            continue
+        class_index = class_names.index(class_name)
+        index_array = np.asarray(indices, dtype=np.int64)
+        support = int(index_array.shape[0])
+        correct = int(np.sum(predictions[index_array] == class_index))
+        output[key] = {
+            "class_name": class_name,
+            "subtype": subtype,
+            "support": support,
+            "correct_broad_class": correct,
+            "recall": float(correct / max(support, 1)),
+        }
+    return output

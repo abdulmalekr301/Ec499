@@ -69,6 +69,8 @@ def calculate_class_weights(
 
     if method == "inverse_frequency":
         weights = count_values.sum() / (len(class_names) * count_values)
+    elif method == "inverse_sqrt":
+        weights = 1.0 / np.sqrt(count_values)
     elif method == "effective_number":
         beta = float(weighting.get("beta", 0.9999))
         if not 0.0 <= beta < 1.0:

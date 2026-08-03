@@ -5,6 +5,7 @@ import csv
 import json
 import re
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,7 +40,12 @@ from secureedge.training.engine import (
     load_graph_dataset_from_manifest,
     load_json,
     manifest_class_names,
+    maybe_mask_temporal_dataset,
+    metadata_from_batches,
     predict_loader,
+    split_paths_from_manifest,
+    subtype_recall_metrics,
+    temporal_feature_indices_from_manifest,
     validate_training_context,
 )
 
@@ -117,6 +123,74 @@ def diagnostic_warnings(row: dict[str, object], *, epoch: int) -> list[str]:
     return warnings
 
 
+def group_aware_sample_weights_from_manifest(
+    manifest: dict[str, object],
+    class_names: list[str],
+    *,
+    limit_per_class: int = 0,
+) -> tuple[list[float] | None, dict[str, object] | None]:
+    policy = dict(manifest.get("final_training_policy", {}))
+    if policy.get("sampler") != "class_subtype_group_graph_weighted_random_sampler":
+        return None, None
+    train_split = dict(manifest["splits"]["train"])
+    metadata_by_path = dict(train_split.get("metadata_by_path", {}))
+    paths = split_paths_from_manifest(manifest, "train", class_names, limit_per_class=limit_per_class)
+    if not paths:
+        return None, None
+
+    class_to_paths: dict[str, list[str]] = {class_name: [] for class_name in class_names}
+    subtype_to_paths: dict[tuple[str, str], list[str]] = {}
+    group_to_paths: dict[tuple[str, str, str], list[str]] = {}
+    metadata_rows: dict[str, dict[str, object]] = {}
+    for path in paths:
+        meta = dict(metadata_by_path.get(path, {}))
+        class_name = str(meta.get("class_name", ""))
+        if class_name not in class_names:
+            raise ValueError(f"Missing or invalid class metadata for training path: {path}")
+        subtype = str(meta.get("subtype", "no_subtype"))
+        group_key = str(meta.get("group_key", f"{class_name}|{subtype}|missing_group"))
+        metadata_rows[path] = meta
+        class_to_paths[class_name].append(path)
+        subtype_to_paths.setdefault((class_name, subtype), []).append(path)
+        group_to_paths.setdefault((class_name, subtype, group_key), []).append(path)
+
+    class_count = len([class_name for class_name, values in class_to_paths.items() if values])
+    if class_count != len(class_names):
+        missing = [class_name for class_name, values in class_to_paths.items() if not values]
+        raise ValueError(f"Group-aware sampler requires all train classes: missing={missing}")
+
+    subtype_counts_by_class = Counter(class_name for class_name, _ in subtype_to_paths)
+    group_counts_by_subtype = Counter((class_name, subtype) for class_name, subtype, _ in group_to_paths)
+    weights: list[float] = []
+    for path in paths:
+        meta = metadata_rows[path]
+        class_name = str(meta["class_name"])
+        subtype = str(meta.get("subtype", "no_subtype"))
+        group_key = str(meta.get("group_key", f"{class_name}|{subtype}|missing_group"))
+        group_size = len(group_to_paths[(class_name, subtype, group_key)])
+        weight = 1.0 / (
+            class_count
+            * max(int(subtype_counts_by_class[class_name]), 1)
+            * max(int(group_counts_by_subtype[(class_name, subtype)]), 1)
+            * max(group_size, 1)
+        )
+        weights.append(weight)
+    summary = {
+        "enabled": True,
+        "method": "class_subtype_group_graph_weighted_random_sampler",
+        "replacement": True,
+        "num_samples_per_epoch": len(paths),
+        "class_count": class_count,
+        "subtype_counts_by_class": dict(sorted(subtype_counts_by_class.items())),
+        "group_count": len(group_to_paths),
+        "group_counts_by_subtype": {
+            f"{class_name}|{subtype}": int(count)
+            for (class_name, subtype), count in sorted(group_counts_by_subtype.items())
+        },
+    }
+    return weights, summary
+
+
 def write_office_run_markdown(
     path: Path,
     *,
@@ -161,6 +235,9 @@ def write_office_run_markdown(
         f"max_epochs={run_config['max_epochs']}",
         f"early_stopping_patience={run_config['early_stopping_patience']}",
         f"print_class_every={run_config['print_class_every']}",
+        f"label_smoothing={run_config['label_smoothing']}",
+        f"temporal_features_masked={run_config['temporal_features_masked']}",
+        f"temporal_feature_indices={run_config['temporal_feature_indices']}",
         "```",
         "",
         "## Dataset",
@@ -271,6 +348,21 @@ def write_office_run_markdown(
                 class_rows,
             )
         )
+        subtype_recall = latest.get("per_subtype_recall", {})
+        if isinstance(subtype_recall, dict) and subtype_recall:
+            lines.extend(["", "## Latest Validation Per-Subtype Recall", ""])
+            rows = []
+            for key, item in subtype_recall.items():
+                rows.append(
+                    [
+                        item["class_name"],
+                        item["subtype"],
+                        item["support"],
+                        item["correct_broad_class"],
+                        f"{float(item['recall']):.6f}",
+                    ]
+                )
+            lines.extend(markdown_table(["Class", "Subtype", "Support", "Correct", "Recall"], rows))
         lines.extend(
             [
                 "",
@@ -361,11 +453,25 @@ def train_office_model(
         context.class_names,
         office_config.imbalance_policy,
     )
-    sample_weights, balanced_sampler = sample_weights_from_class_counts(
-        train_class_counts,
+    sample_weights, balanced_sampler = group_aware_sample_weights_from_manifest(
+        manifest,
         context.class_names,
-        office_config.imbalance_policy,
+        limit_per_class=root_config.TRAIN_LIMIT_PER_CLASS,
     )
+    if sample_weights is None:
+        sample_weights, balanced_sampler = sample_weights_from_class_counts(
+            train_class_counts,
+            context.class_names,
+            office_config.imbalance_policy,
+        )
+    else:
+        class_weight_summary["sampler_note"] = "Using manifest-provided group-aware sampler instead of YAML class sampler."
+    if balanced_sampler is None:
+        _, balanced_sampler = sample_weights_from_class_counts(
+            train_class_counts,
+            context.class_names,
+            office_config.imbalance_policy,
+        )
     train_sampler = None
     if sample_weights is not None:
         train_sampler = WeightedRandomSampler(
@@ -385,6 +491,9 @@ def train_office_model(
         context.class_names,
         limit_per_class=root_config.EVAL_LIMIT_PER_CLASS,
     )
+    temporal_feature_indices = temporal_feature_indices_from_manifest(manifest)
+    train_dataset = maybe_mask_temporal_dataset(train_dataset, manifest)
+    val_dataset = maybe_mask_temporal_dataset(val_dataset, manifest)
     train_loader = DataLoader(
         train_dataset,
         batch_size=root_config.BATCH_SIZE,
@@ -403,7 +512,7 @@ def train_office_model(
     class_weight_tensor = None
     if class_weights is not None:
         class_weight_tensor = torch.tensor(class_weights, dtype=torch.float32, device=device)
-    criterion = nn.CrossEntropyLoss(weight=class_weight_tensor)
+    criterion = nn.CrossEntropyLoss(weight=class_weight_tensor, label_smoothing=root_config.LABEL_SMOOTHING)
     optimizer = torch.optim.Adam(model.parameters(), lr=root_config.LEARNING_RATE, weight_decay=root_config.WEIGHT_DECAY)
     use_amp = amp_is_enabled(device)
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
@@ -462,6 +571,7 @@ def train_office_model(
         "cosine_t0": root_config.COSINE_T0,
         "cosine_t_mult": root_config.COSINE_T_MULT,
         "weight_decay": root_config.WEIGHT_DECAY,
+        "label_smoothing": root_config.LABEL_SMOOTHING,
         "grad_clip_max_norm": root_config.GRAD_CLIP_MAX_NORM,
         "print_class_every": root_config.PRINT_CLASS_EVERY,
         "n_batches_per_epoch": len(train_loader),
@@ -484,6 +594,9 @@ def train_office_model(
         "train_class_counts": train_class_counts,
         "class_weight_summary": class_weight_summary,
         "balanced_batches": balanced_sampler,
+        "temporal_features_masked": bool(temporal_feature_indices),
+        "temporal_feature_indices": temporal_feature_indices,
+        "temporal_feature_count": len(temporal_feature_indices),
         "latest_history_json_path": str(history_path),
         "run_history_json_path": str(run_history_json_path),
         "run_history_csv_path": str(run_history_csv_path),
@@ -527,6 +640,9 @@ def train_office_model(
                 "train_class_counts": train_class_counts,
                 "class_weights": class_weight_summary.get("weights_by_class"),
                 "balanced_batches": balanced_sampler,
+                "label_smoothing": root_config.LABEL_SMOOTHING,
+                "temporal_features_masked": bool(temporal_feature_indices),
+                "temporal_feature_count": len(temporal_feature_indices),
                 "training_config_hash": training_config_hash,
             },
             indent=2,
@@ -590,8 +706,10 @@ def train_office_model(
             if scheduler is not None and root_config.LR_SCHEDULER == "cosine" and epoch > root_config.WARMUP_EPOCHS:
                 scheduler.step(epoch - root_config.WARMUP_EPOCHS)
 
-        predictions, targets, _ = predict_loader(model, val_loader, device)
+        predictions, targets, batches = predict_loader(model, val_loader, device)
         metrics = class_metrics(predictions, targets, context.class_names)
+        metadata = metadata_from_batches(batches)
+        per_subtype_recall = subtype_recall_metrics(predictions, targets, metadata, context.class_names)
         validation_macro_f1 = float(metrics["macro_f1"])
         scheduler_monitor = root_config.PLATEAU_MONITOR if root_config.LR_SCHEDULER == "plateau" else root_config.LR_SCHEDULER
         scheduler_metric = validation_macro_f1
@@ -632,6 +750,7 @@ def train_office_model(
             "incorrect": int(metrics["incorrect"]),
             "total": int(metrics["total"]),
             "per_class": metrics["per_class"],
+            "per_subtype_recall": per_subtype_recall,
             "confusion_matrix": metrics["confusion_matrix"],
         }
         warnings = diagnostic_warnings(row, epoch=epoch)
@@ -700,6 +819,10 @@ def train_office_model(
                 "run_checkpoint_path": str(run_checkpoint_path),
                 "class_weight_summary": class_weight_summary,
                 "balanced_batches": balanced_sampler,
+                "label_smoothing": root_config.LABEL_SMOOTHING,
+                "temporal_features_masked": bool(temporal_feature_indices),
+                "temporal_feature_indices": temporal_feature_indices,
+                "per_subtype_recall": per_subtype_recall,
             }
             checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(checkpoint, checkpoint_path)

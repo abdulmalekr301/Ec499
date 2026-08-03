@@ -243,15 +243,14 @@ imbalance:
   loss:
     name: weighted_cross_entropy
     class_weighting:
-      method: effective_number
-      beta: 0.9999
+      method: inverse_sqrt
       normalize_mean_to_one: true
-      max_weight: 8.0
+      max_weight: 5.0
   balanced_batches:
-    enabled: true
-    method: weighted_random_sampler
+    enabled: false
+    method: none
     replacement: true
-    sample_weighting: inverse_class_frequency
+    sample_weighting: none
 
 graph:
   flow_features: 92

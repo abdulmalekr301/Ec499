@@ -20,7 +20,11 @@ from secureedge.training.engine import (
     load_graph_dataset_from_manifest,
     load_json,
     manifest_class_names,
+    maybe_mask_temporal_dataset,
+    metadata_from_batches,
     predict_loader,
+    subtype_recall_metrics,
+    temporal_feature_indices_from_manifest,
 )
 
 
@@ -28,38 +32,6 @@ DEFAULT_OFFICE_METRICS_PATH = root_config.ARTIFACTS_DIR / "office_model" / "metr
 DEFAULT_OFFICE_CLASSIFICATION_REPORT_PATH = root_config.ARTIFACTS_DIR / "office_model" / "classification_report.json"
 DEFAULT_OFFICE_CONFUSION_MATRIX_PATH = root_config.ARTIFACTS_DIR / "office_model" / "confusion_matrix.csv"
 DEFAULT_OFFICE_EVALUATION_REPORT_PATH = root_config.ARTIFACTS_DIR / "office_model" / "evaluation_report.md"
-
-
-def as_list(value: object, length: int) -> list[object]:
-    if isinstance(value, list | tuple):
-        return list(value)
-    return [value for _ in range(length)]
-
-
-def batch_metadata(batches: list[Any]) -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
-    for batch in batches:
-        count = int(batch.y.view(-1).shape[0])
-        source_datasets = as_list(getattr(batch, "source_dataset", "unknown"), count)
-        class_names = as_list(getattr(batch, "class_name", ""), count)
-        candidate_ids = as_list(getattr(batch, "office_candidate_identity", ""), count)
-        graph_ids = as_list(getattr(batch, "graph_id", ""), count)
-        for source_dataset, class_name, candidate_id, graph_id in zip(
-            source_datasets,
-            class_names,
-            candidate_ids,
-            graph_ids,
-            strict=False,
-        ):
-            rows.append(
-                {
-                    "source_dataset": str(source_dataset),
-                    "class_name": str(class_name),
-                    "candidate_identity": str(candidate_id),
-                    "graph_id": str(graph_id),
-                }
-            )
-    return rows
 
 
 def source_stratified_webbased_metrics(
@@ -135,6 +107,7 @@ def write_evaluation_markdown(path: Path, metrics: dict[str, Any]) -> None:
         f"- Accuracy: `{metrics['accuracy']:.6f}`",
         f"- Macro F1: `{metrics['macro_f1']:.6f}`",
         f"- Weighted F1: `{metrics['weighted_f1']:.6f}`",
+        f"- Temporal features masked: `{metrics['temporal_features_masked']}`",
         f"- Checkpoint: `{metrics['checkpoint_path']}`",
         f"- Graph manifest: `{metrics['graph_manifest_path']}`",
         "",
@@ -155,6 +128,22 @@ def write_evaluation_markdown(path: Path, metrics: dict[str, Any]) -> None:
             f"{item['f1']:.6f} | {item['support']} | {item['false_positive_rate']:.6f} | "
             f"{item['false_negative_rate']:.6f} |"
         )
+    subtype_recall = metrics.get("per_subtype_recall", {})
+    if isinstance(subtype_recall, dict) and subtype_recall:
+        lines.extend(
+            [
+                "",
+                "## Per-Subtype Broad-Class Recall",
+                "",
+                "| Class | Subtype | Support | Correct | Recall |",
+                "| --- | --- | ---: | ---: | ---: |",
+            ]
+        )
+        for item in subtype_recall.values():
+            lines.append(
+                f"| {item['class_name']} | {item['subtype']} | {item['support']} | "
+                f"{item['correct_broad_class']} | {item['recall']:.6f} |"
+            )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -187,6 +176,8 @@ def evaluate_office_model(
         class_names,
         limit_per_class=root_config.EVAL_LIMIT_PER_CLASS,
     )
+    temporal_feature_indices = temporal_feature_indices_from_manifest(manifest)
+    dataset = maybe_mask_temporal_dataset(dataset, manifest)
     loader = DataLoader(
         dataset,
         batch_size=root_config.EVAL_BATCH_SIZE,
@@ -196,7 +187,7 @@ def evaluate_office_model(
     model = SecureEdgeHGNN(num_classes=len(class_names)).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     predictions, targets, batches = predict_loader(model, loader, device)
-    metadata = batch_metadata(batches)
+    metadata = metadata_from_batches(batches)
     metrics = class_metrics(predictions, targets, class_names)
     metrics.update(
         {
@@ -206,6 +197,9 @@ def evaluate_office_model(
             "graph_manifest_hash": manifest.get("manifest_hash"),
             "checkpoint_graph_manifest_hash": checkpoint.get("graph_manifest_hash"),
             "model_attention_conv": checkpoint.get("model_attention_conv", getattr(model, "attention_conv", "unknown")),
+            "temporal_features_masked": bool(temporal_feature_indices),
+            "temporal_feature_indices": temporal_feature_indices,
+            "per_subtype_recall": subtype_recall_metrics(predictions, targets, metadata, class_names),
             "source_stratified_webbased": source_stratified_webbased_metrics(predictions, targets, metadata, class_names),
             "bootstrap_macro_f1_ci": bootstrap_macro_f1_ci(
                 predictions,
